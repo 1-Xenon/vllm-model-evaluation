@@ -1,0 +1,25 @@
+[app]
+name = "vllm-model-evaluation"
+environment = "development"
+
+[server]
+host = "127.0.0.1"
+port = 8000
+log_level = "INFO"
+
+[storage]
+data_root = "./data"
+database_url = "sqlite:///./data/evaluation.db"
+task_bundle_root = "./data/task-bundles"
+results_root = "./data/results"
+exports_root = "./data/exports"
+
+[runner]
+type = "fake"
+endpoint_url = ""
+model_name = ""
+timeout_seconds = 120.0
+max_retries = 0
+concurrency = 1
+streaming = true
+
