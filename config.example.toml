@@ -18,8 +18,8 @@ exports_root = "./data/exports"
 type = "fake"
 endpoint_url = ""
 model_name = ""
+auth_token_env = ""
 timeout_seconds = 120.0
 max_retries = 0
 concurrency = 1
 streaming = true
-

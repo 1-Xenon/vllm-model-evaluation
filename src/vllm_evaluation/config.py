@@ -28,6 +28,7 @@ class Settings:
     runner_type: str = "fake"
     runner_endpoint_url: str = ""
     runner_model_name: str = ""
+    runner_auth_token_env: str = ""
     runner_timeout_seconds: float = 120.0
     runner_max_retries: int = 0
     runner_concurrency: int = 1
@@ -48,6 +49,7 @@ _CONFIG_KEYS: dict[tuple[str, str], tuple[str, type]] = {
     ("runner", "type"): ("runner_type", str),
     ("runner", "endpoint_url"): ("runner_endpoint_url", str),
     ("runner", "model_name"): ("runner_model_name", str),
+    ("runner", "auth_token_env"): ("runner_auth_token_env", str),
     ("runner", "timeout_seconds"): ("runner_timeout_seconds", float),
     ("runner", "max_retries"): ("runner_max_retries", int),
     ("runner", "concurrency"): ("runner_concurrency", int),
@@ -68,6 +70,7 @@ _ENV_KEYS: dict[str, tuple[str, type]] = {
     "VLLM_EVAL_RUNNER_TYPE": ("runner_type", str),
     "VLLM_EVAL_RUNNER_ENDPOINT_URL": ("runner_endpoint_url", str),
     "VLLM_EVAL_RUNNER_MODEL_NAME": ("runner_model_name", str),
+    "VLLM_EVAL_RUNNER_AUTH_TOKEN_ENV": ("runner_auth_token_env", str),
     "VLLM_EVAL_RUNNER_TIMEOUT_SECONDS": ("runner_timeout_seconds", float),
     "VLLM_EVAL_RUNNER_MAX_RETRIES": ("runner_max_retries", int),
     "VLLM_EVAL_RUNNER_CONCURRENCY": ("runner_concurrency", int),
