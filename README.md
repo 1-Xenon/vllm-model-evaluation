@@ -5,6 +5,7 @@ This project provides a traceable, offline-capable workflow for comparing two lo
 - [`vllm_evaluation_design_spec.md`](vllm_evaluation_design_spec.md)
 - [`initial_release_decisions.md`](initial_release_decisions.md)
 - [`initial_release_task_breakdown.md`](initial_release_task_breakdown.md)
+- [`task_manifest_schema.md`](task_manifest_schema.md)
 
 ## Phase 0 foundation
 

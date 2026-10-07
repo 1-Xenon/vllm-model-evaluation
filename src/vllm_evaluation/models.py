@@ -152,6 +152,7 @@ class TaskInput(Base, BaseModel):
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     input_type: Mapped[str] = mapped_column(String(20), nullable=False)
     text_content: Mapped[str | None] = mapped_column(Text)
+    transform_metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     media_asset_id: Mapped[str | None] = mapped_column(
         ForeignKey("media_assets.id", ondelete="RESTRICT")
     )
