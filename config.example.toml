@@ -21,5 +21,7 @@ model_name = ""
 auth_token_env = ""
 timeout_seconds = 120.0
 max_retries = 0
+retry_backoff_seconds = 0.0
 concurrency = 1
+warmup_count = 0
 streaming = true

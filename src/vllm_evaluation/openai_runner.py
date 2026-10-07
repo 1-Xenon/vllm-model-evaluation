@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import json
-from dataclasses import dataclass
+import time
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -96,11 +98,18 @@ def _stream_event(payload: dict[str, Any]) -> RunnerEvent | None:
     )
 
 
-def parse_stream_lines(lines: list[bytes]) -> RunnerResult:
+def parse_stream_lines(
+    lines: Iterable[bytes],
+    *,
+    started_at: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> RunnerResult:
     """Parse Server-Sent Events from an OpenAI-compatible response."""
 
     events: list[RunnerEvent] = []
     raw_events: list[dict[str, Any]] = []
+    first_output_at: float | None = None
+    first_answer_at: float | None = None
     try:
         for line in lines:
             text = line.decode("utf-8").strip()
@@ -116,6 +125,11 @@ def parse_stream_lines(lines: list[bytes]) -> RunnerResult:
             event = _stream_event(payload)
             if event is not None:
                 events.append(event)
+                observed_at = clock()
+                if event.event_type in {"content", "reasoning"} and event.text:
+                    first_output_at = first_output_at or observed_at
+                if event.event_type == "content" and event.text:
+                    first_answer_at = first_answer_at or observed_at
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         return RunnerResult(
             status=AttemptStatus.FAILED,
@@ -124,7 +138,17 @@ def parse_stream_lines(lines: list[bytes]) -> RunnerResult:
             error_message=str(exc),
             retryable=True,
         )
-    return result_from_events(events, raw_events=raw_events)
+    result = result_from_events(events, raw_events=raw_events)
+    if started_at is not None:
+        result = replace(
+            result,
+            ttft_seconds=first_output_at - started_at if first_output_at is not None else None,
+            first_answer_seconds=(
+                first_answer_at - started_at if first_answer_at is not None else None
+            ),
+            total_latency_seconds=clock() - started_at,
+        )
+    return result
 
 
 class OpenAICompatibleRunner(ModelRunner):
@@ -157,14 +181,18 @@ class OpenAICompatibleRunner(ModelRunner):
             headers=headers,
             method="POST",
         )
+        started_at = time.monotonic()
         try:
             with urlopen(http_request, timeout=self.config.timeout_seconds) as response:
                 if payload["stream"]:
-                    return parse_stream_lines(list(response))
+                    return parse_stream_lines(response, started_at=started_at)
                 response_payload = json.loads(response.read().decode("utf-8"))
                 if not isinstance(response_payload, dict):
                     raise ValueError("response must be a JSON object")
-                return result_from_message(response_payload)
+                return replace(
+                    result_from_message(response_payload),
+                    total_latency_seconds=time.monotonic() - started_at,
+                )
         except HTTPError as exc:
             return RunnerResult(
                 status=AttemptStatus.FAILED,

@@ -66,6 +66,9 @@ class RunnerResult:
     error_code: str | None = None
     error_message: str | None = None
     retryable: bool = False
+    ttft_seconds: float | None = None
+    first_answer_seconds: float | None = None
+    total_latency_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

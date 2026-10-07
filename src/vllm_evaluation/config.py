@@ -31,7 +31,9 @@ class Settings:
     runner_auth_token_env: str = ""
     runner_timeout_seconds: float = 120.0
     runner_max_retries: int = 0
+    runner_retry_backoff_seconds: float = 0.0
     runner_concurrency: int = 1
+    runner_warmup_count: int = 0
     runner_streaming: bool = True
 
 
@@ -52,7 +54,9 @@ _CONFIG_KEYS: dict[tuple[str, str], tuple[str, type]] = {
     ("runner", "auth_token_env"): ("runner_auth_token_env", str),
     ("runner", "timeout_seconds"): ("runner_timeout_seconds", float),
     ("runner", "max_retries"): ("runner_max_retries", int),
+    ("runner", "retry_backoff_seconds"): ("runner_retry_backoff_seconds", float),
     ("runner", "concurrency"): ("runner_concurrency", int),
+    ("runner", "warmup_count"): ("runner_warmup_count", int),
     ("runner", "streaming"): ("runner_streaming", bool),
 }
 
@@ -73,7 +77,9 @@ _ENV_KEYS: dict[str, tuple[str, type]] = {
     "VLLM_EVAL_RUNNER_AUTH_TOKEN_ENV": ("runner_auth_token_env", str),
     "VLLM_EVAL_RUNNER_TIMEOUT_SECONDS": ("runner_timeout_seconds", float),
     "VLLM_EVAL_RUNNER_MAX_RETRIES": ("runner_max_retries", int),
+    "VLLM_EVAL_RUNNER_RETRY_BACKOFF_SECONDS": ("runner_retry_backoff_seconds", float),
     "VLLM_EVAL_RUNNER_CONCURRENCY": ("runner_concurrency", int),
+    "VLLM_EVAL_RUNNER_WARMUP_COUNT": ("runner_warmup_count", int),
     "VLLM_EVAL_RUNNER_STREAMING": ("runner_streaming", bool),
 }
 
@@ -104,8 +110,12 @@ def _validate(settings: Settings) -> Settings:
         raise ConfigurationError("runner timeout_seconds must be greater than zero")
     if settings.runner_max_retries < 0:
         raise ConfigurationError("runner max_retries cannot be negative")
+    if settings.runner_retry_backoff_seconds < 0:
+        raise ConfigurationError("runner retry_backoff_seconds cannot be negative")
     if settings.runner_concurrency < 1:
         raise ConfigurationError("runner concurrency must be at least one")
+    if settings.runner_warmup_count < 0:
+        raise ConfigurationError("runner warmup_count cannot be negative")
     if settings.runner_type not in {"fake", "openai_compatible"}:
         raise ConfigurationError("runner type must be 'fake' or 'openai_compatible'")
     return settings
