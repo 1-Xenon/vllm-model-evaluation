@@ -16,4 +16,3 @@ def configure_logging(level: str = "INFO") -> None:
         level=numeric_level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-

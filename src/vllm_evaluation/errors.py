@@ -15,4 +15,3 @@ class ValidationError(ApplicationError):
 
 class NotFoundError(ApplicationError):
     """Raised when a requested record or asset does not exist."""
-

@@ -49,4 +49,3 @@ streaming = false
     def test_invalid_runner_concurrency_is_rejected(self) -> None:
         with self.assertRaises(ConfigurationError):
             load_settings(environ={"VLLM_EVAL_RUNNER_CONCURRENCY": "0"})
-

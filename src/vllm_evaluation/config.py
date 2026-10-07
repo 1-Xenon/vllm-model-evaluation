@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import os
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
 
 from .errors import ConfigurationError
 
@@ -155,4 +155,3 @@ def prepare_storage(settings: Settings) -> None:
         settings.exports_root,
     ):
         path.mkdir(parents=True, exist_ok=True)
-

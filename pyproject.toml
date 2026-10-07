@@ -9,6 +9,7 @@ description = "Traceable offline evaluation of stateless vision-language models"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.14,<2.0",
     "fastapi>=0.115,<1.0",
     "pydantic-settings>=2.6,<3.0",
     "python-multipart>=0.0.20,<1.0",
@@ -41,4 +42,3 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
-

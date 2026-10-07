@@ -19,6 +19,12 @@ The initial implementation foundation uses:
 
 The current bootstrap command only validates configuration and creates configured local storage directories. Task import, persistence models, model runners, and the web interface are implemented in later phases.
 
+The Phase 1 persistence layer uses SQLite through SQLAlchemy. Schema changes are tracked with Alembic and should be applied with:
+
+```bash
+alembic upgrade head
+```
+
 ## Local setup
 
 Create a virtual environment and install the project with development dependencies:
@@ -45,4 +51,3 @@ pytest
 ruff check .
 ruff format --check .
 ```
-
