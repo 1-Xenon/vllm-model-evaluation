@@ -10,8 +10,14 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("task_inputs", sa.Column("transform_metadata_json", sa.JSON(), nullable=True))
+    inspector = sa.inspect(op.get_bind())
+    columns = {column["name"] for column in inspector.get_columns("task_inputs")}
+    if "transform_metadata_json" not in columns:
+        op.add_column("task_inputs", sa.Column("transform_metadata_json", sa.JSON(), nullable=True))
 
 
 def downgrade() -> None:
-    op.drop_column("task_inputs", "transform_metadata_json")
+    inspector = sa.inspect(op.get_bind())
+    columns = {column["name"] for column in inspector.get_columns("task_inputs")}
+    if "transform_metadata_json" in columns:
+        op.drop_column("task_inputs", "transform_metadata_json")

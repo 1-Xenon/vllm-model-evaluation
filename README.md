@@ -18,7 +18,7 @@ The initial implementation foundation uses:
 - Pytest for tests.
 - Ruff for formatting and linting.
 
-The current bootstrap command only validates configuration and creates configured local storage directories. Task import, persistence models, model runners, and the web interface are implemented in later phases.
+The current bootstrap command validates configuration and creates configured local storage directories. The local API and operator/reviewer pages are available through `vllm_evaluation.app:create_app`.
 
 The Phase 1 persistence layer uses SQLite through SQLAlchemy. Schema changes are tracked with Alembic and should be applied with:
 
@@ -43,7 +43,21 @@ cp config.example.toml config.toml
 vllm-evaluation --config config.toml
 ```
 
-The application does not download models or require a GPU. Model endpoints will be supplied separately when the runner is implemented.
+The application does not package model weights. Sequential Qwen2.5-VL model-serving commands for the A4000 are documented in [`model-serving/README.md`](model-serving/README.md). Model endpoints remain separately hosted and configurable.
+
+## Application server
+
+```bash
+uvicorn vllm_evaluation.app:create_app --factory --host 127.0.0.1 --port 8000
+```
+
+Open `/` for the operator dashboard, `/docs` for the operator API, and `/review` for the blind-review page. Operators can import snapshots, add model configurations, create and execute runs, build comparisons, create assignments, inspect submitted judgments, view summaries, and create JSONL/CSV exports. Reviewers can load an assignment, inspect text and image inputs, submit left/right/tie judgments, assess answer acceptability, record error tags and comments, and revisit an assignment. The application can run against the deterministic fake runner before a live endpoint is configured.
+
+## Later-phase materials
+
+- [`operator_guide.md`](operator_guide.md) describes the operator and review workflow.
+- [`deployment.md`](deployment.md) describes containerisation, persistent storage, and offline transfer.
+- [`validation_report.md`](validation_report.md) records acceptance scenarios and known limitations.
 
 ## Development checks
 

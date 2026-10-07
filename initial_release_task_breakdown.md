@@ -1,15 +1,5 @@
-# Initial Release Task Breakdown
-
-**Status:** Implementation planning  
-**Date:** 7 October 2026  
-**Related documents:**
-
-- `vllm_evaluation_design_spec.md`
-- `initial_release_decisions.md`
-
-This document breaks the initial release into small, independently trackable tasks. The design specification remains authoritative; the decisions document records the current implementation assumptions and configurable areas.
-
-## Ultimate end goal
+# Task Breakdown for Initial Release
+## End Goal
 
 The project’s ultimate goal is to provide a practical, traceable, offline-capable evaluation application for comparing two locally hosted fine-tuned vision-language models on representative stateless tasks.
 

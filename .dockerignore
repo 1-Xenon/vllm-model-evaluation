@@ -1,0 +1,11 @@
+.git
+.venv
+.venv-vllm
+data
+*.db
+*.sqlite
+__pycache__
+.pytest_cache
+.ruff_cache
+tests
+output.txt

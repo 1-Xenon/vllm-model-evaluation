@@ -1,0 +1,23 @@
+services:
+  evaluation:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      VLLM_EVAL_DATABASE_URL: sqlite:////data/evaluation.db
+      VLLM_EVAL_DATA_ROOT: /data
+      VLLM_EVAL_TASK_BUNDLE_ROOT: /data/task-bundles
+      VLLM_EVAL_RESULTS_ROOT: /data/results
+      VLLM_EVAL_EXPORTS_ROOT: /data/exports
+      VLLM_EVAL_RUNNER_TYPE: openai_compatible
+      VLLM_EVAL_RUNNER_ENDPOINT_URL: ${VLLM_EVAL_RUNNER_ENDPOINT_URL:-http://host.docker.internal:8001/v1/chat/completions}
+      VLLM_EVAL_RUNNER_MODEL_NAME: ${VLLM_EVAL_RUNNER_MODEL_NAME:-Qwen/Qwen2.5-VL-3B-Instruct-AWQ}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - evaluation-data:/data
+
+volumes:
+  evaluation-data:

@@ -1,10 +1,4 @@
-# Initial Release Decisions and Configuration
-
-**Status:** Working implementation decisions  
-**Date:** 7 October 2026  
-**Source of truth:** `vllm_evaluation_design_spec.md`
-
-This document records decisions made while preparing the initial release. The design specification remains authoritative. This document makes its current interpretations and configurable areas explicit so implementation can proceed without hard-coding environment-specific assumptions.
+# Decisions made for Initial Release
 
 ## 1. Confirmed initial-release scope
 

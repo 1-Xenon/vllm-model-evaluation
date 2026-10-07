@@ -1,3 +1,3 @@
 {"task_id":"caption-001","category":"image_captioning","prompt":"Describe the image in one sentence.","inputs":[{"type":"image","path":"media/example.svg"}],"operator_notes":"Example fixture; not part of the eventual evaluation set."}
 {"task_id":"summary-001","category":"text_summarisation","prompt":"Summarise the following text in two sentences.","inputs":[{"type":"text","text":"A small evaluation task should preserve its input, generated output, configuration, and review history so later analysis remains traceable."}]}
-
+{"task_id":"object-001","category":"object_recognition","prompt":"Name the prominent objects visible in the image.","inputs":[{"type":"image","path":"media/example.svg"}]}
