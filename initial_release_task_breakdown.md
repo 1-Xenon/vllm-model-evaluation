@@ -9,6 +9,14 @@
 
 This document breaks the initial release into small, independently trackable tasks. The design specification remains authoritative; the decisions document records the current implementation assumptions and configurable areas.
 
+## Ultimate end goal
+
+The project’s ultimate goal is to provide a practical, traceable, offline-capable evaluation application for comparing two locally hosted fine-tuned vision-language models on representative stateless tasks.
+
+The completed system should allow an operator to freeze one task set, run model A and model B separately under recorded configurations, preserve each input, output, failure, and timing measurement, and then let subject matter experts review anonymous side-by-side results. It should capture reviewer preferences, acceptability judgments, error patterns, and comments, while keeping model identities hidden until review is complete.
+
+The resulting evidence should help the team understand each model’s useful capabilities, recurring failure modes, reviewer disagreement, and latency tradeoffs. It should support decisions about fine-tuning, acceptance criteria, and the design of a future golden evaluation set. It is an exploratory comparison tool, not an automatic accuracy benchmark, production load-testing system, or guarantee of model superiority.
+
 ## Phase 0: Project foundation
 
 - Create the application directory structure.
