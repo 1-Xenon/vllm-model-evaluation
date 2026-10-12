@@ -73,6 +73,7 @@ exports_root = "./data/exports"
             self.assertIn("Import snapshot", page)
             self.assertIn("<select id='bundle-root' required>", page)
             self.assertIn("/api/task-bundles", page)
+            self.assertIn("bundle not recorded", page)
             self.assertIn("Create run", page)
             self.assertIn("Create comparison", page)
             self.assertIn("id='attempts-a' multiple required", page)

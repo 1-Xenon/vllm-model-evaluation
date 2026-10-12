@@ -45,9 +45,11 @@ from .runner_factory import create_runner
 
 
 def _serialize_snapshot(snapshot: TaskSnapshot) -> dict[str, Any]:
+    bundle_root = (snapshot.notes_json or {}).get("bundle_root")
     return {
         "id": snapshot.id,
         "source_name": snapshot.source_name,
+        "bundle_name": Path(bundle_root).name if bundle_root else None,
         "snapshot_hash": snapshot.snapshot_hash,
         "manifest_hash": snapshot.manifest_hash,
         "task_count": snapshot.task_count,
@@ -694,10 +696,13 @@ async function refreshRecords() {
   state.assignments = await request('/api/assignments');
   state.bundles = await request('/api/task-bundles');
   setOptions('bundle-root', state.bundles, (record) => record.name);
+  const snapshotLabel = (record) =>
+    (record.bundle_name || 'bundle not recorded') + ' [' + record.id + '] (' +
+    record.task_count + ' tasks)';
   setOptions('run-snapshot', state.snapshots,
-    (record) => record.id + ' (' + record.task_count + ' tasks)');
+    snapshotLabel);
   setOptions('comparison-snapshot', state.snapshots,
-    (record) => record.id + ' (' + record.task_count + ' tasks)');
+    snapshotLabel);
   setOptions('run-config', state.configs,
     (record) => record.display_name + ' [' + record.id + ']');
   const runLabel = (record) => record.run_label + ' [' + record.id + ']';
