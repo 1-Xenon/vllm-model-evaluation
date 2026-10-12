@@ -75,6 +75,8 @@ exports_root = "./data/exports"
             self.assertIn("/api/task-bundles", page)
             self.assertIn("bundle not recorded", page)
             self.assertIn("Create run", page)
+            self.assertIn("record.run_name", page)
+            self.assertIn("(record) => record.display_name);", page)
             self.assertIn("Create comparison", page)
             self.assertIn("id='attempts-a' multiple required", page)
             self.assertIn("id='attempts-b' multiple required", page)

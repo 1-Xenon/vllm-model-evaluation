@@ -44,12 +44,16 @@ from .review import create_comparison, ensure_reviewer_assignments, reviewer_vie
 from .runner_factory import create_runner
 
 
+def _snapshot_bundle_name(snapshot: TaskSnapshot | None) -> str | None:
+    bundle_root = (snapshot.notes_json or {}).get("bundle_root") if snapshot else None
+    return Path(bundle_root).name if bundle_root else None
+
+
 def _serialize_snapshot(snapshot: TaskSnapshot) -> dict[str, Any]:
-    bundle_root = (snapshot.notes_json or {}).get("bundle_root")
     return {
         "id": snapshot.id,
         "source_name": snapshot.source_name,
-        "bundle_name": Path(bundle_root).name if bundle_root else None,
+        "bundle_name": _snapshot_bundle_name(snapshot),
         "snapshot_hash": snapshot.snapshot_hash,
         "manifest_hash": snapshot.manifest_hash,
         "task_count": snapshot.task_count,
@@ -69,11 +73,14 @@ def _serialize_model_config(config: ModelConfig) -> dict[str, Any]:
 
 
 def _serialize_run(run: ModelRun) -> dict[str, Any]:
+    bundle_name = _snapshot_bundle_name(run.snapshot) or "bundle-not-recorded"
+    model_name = run.model_config.display_name
     return {
         "id": run.id,
         "snapshot_id": run.snapshot_id,
         "model_config_id": run.model_config_id,
         "run_label": run.run_label,
+        "run_name": f"{bundle_name}_{model_name}",
         "status": run.status,
         "created_at": run.created_at.isoformat(),
     }
@@ -696,16 +703,13 @@ async function refreshRecords() {
   state.assignments = await request('/api/assignments');
   state.bundles = await request('/api/task-bundles');
   setOptions('bundle-root', state.bundles, (record) => record.name);
-  const snapshotLabel = (record) =>
-    (record.bundle_name || 'bundle not recorded') + ' [' + record.id + '] (' +
-    record.task_count + ' tasks)';
   setOptions('run-snapshot', state.snapshots,
-    snapshotLabel);
+    (record) => record.bundle_name || 'bundle not recorded');
   setOptions('comparison-snapshot', state.snapshots,
-    snapshotLabel);
+    (record) => record.bundle_name || 'bundle not recorded');
   setOptions('run-config', state.configs,
-    (record) => record.display_name + ' [' + record.id + ']');
-  const runLabel = (record) => record.run_label + ' [' + record.id + ']';
+    (record) => record.display_name);
+  const runLabel = (record) => record.run_name;
   setOptions('comparison-run-a', state.runs, runLabel);
   setOptions('comparison-run-b', state.runs, runLabel);
   setOptions('run-id', state.runs, runLabel);
