@@ -28,6 +28,7 @@ from .models import (
     ReviewerAssignment,
     ReviewerJudgment,
     Task,
+    TaskInput,
     TaskSnapshot,
 )
 from .operator import (
@@ -103,6 +104,30 @@ def _serialize_comparison(comparison: ComparisonSession) -> dict[str, Any]:
     }
 
 
+def _bundle_root_for_snapshot(
+    snapshot: TaskSnapshot | None,
+    configured_root: Path,
+    relative_path: str | None = None,
+) -> Path:
+    stored_root = (snapshot.notes_json or {}).get("bundle_root") if snapshot else None
+    if stored_root:
+        return Path(stored_root).resolve()
+
+    root = configured_root.resolve()
+    if (root / "manifest.jsonl").is_file():
+        return root
+    if not root.is_dir():
+        return root
+
+    children = [child for child in root.iterdir() if child.is_dir()]
+    if relative_path:
+        relative = Path(*PurePosixPath(relative_path).parts)
+        matches = [child for child in children if (child / relative).is_file()]
+    else:
+        matches = [child for child in children if (child / "manifest.jsonl").is_file()]
+    return matches[0] if len(matches) == 1 else root
+
+
 def _serialize_assignment(assignment: ReviewerAssignment) -> dict[str, Any]:
     return {
         "assignment_id": assignment.id,
@@ -158,6 +183,17 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
         with session_scope(factory) as session:
             return [_serialize_snapshot(snapshot) for snapshot in list_snapshots(session)]
 
+    @app.get("/api/task-bundles")
+    def task_bundles() -> list[dict[str, str]]:
+        root = settings.task_bundle_root.resolve()
+        if not root.is_dir():
+            return []
+        return [
+            {"id": str(bundle), "name": bundle.name, "manifest_path": "manifest.jsonl"}
+            for bundle in sorted(root.iterdir(), key=lambda path: path.name.lower())
+            if bundle.is_dir() and (bundle / "manifest.jsonl").is_file()
+        ]
+
     @app.get("/api/model-configs")
     def model_configs_list() -> list[dict[str, Any]]:
         with session_scope(factory) as session:
@@ -167,9 +203,19 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
     @app.post("/api/snapshots/import")
     def import_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
         try:
+            bundle_root = Path(payload["bundle_root"]).resolve()
+            bundle_parent = settings.task_bundle_root.resolve()
+            if bundle_root == bundle_parent:
+                raise ValueError("bundle_root must select a folder under the task-bundle parent")
+            try:
+                bundle_root.relative_to(bundle_parent)
+            except ValueError as exc:
+                raise ValueError(
+                    "bundle_root must be under the configured task-bundle parent"
+                ) from exc
             with session_scope(factory) as session:
                 snapshot = import_bundle(
-                    session, payload["bundle_root"], payload.get("manifest_path", "manifest.jsonl")
+                    session, bundle_root, payload.get("manifest_path", "manifest.jsonl")
                 )
                 return _serialize_snapshot(snapshot)
         except (KeyError, ValueError) as exc:
@@ -203,6 +249,22 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
         try:
             with session_scope(factory) as session:
                 asset_root = payload.get("asset_root")
+                if not asset_root:
+                    run = session.get(ModelRun, run_id)
+                    snapshot = session.get(TaskSnapshot, run.snapshot_id) if run else None
+                    image_path = None
+                    if run:
+                        image_path = session.scalar(
+                            select(MediaAsset.relative_path)
+                            .join(TaskInput, TaskInput.media_asset_id == MediaAsset.id)
+                            .join(Task, TaskInput.task_id == Task.id)
+                            .where(Task.snapshot_id == run.snapshot_id)
+                            .where(TaskInput.input_type == "image")
+                            .order_by(Task.task_order, TaskInput.ordinal)
+                        )
+                    asset_root = _bundle_root_for_snapshot(
+                        snapshot, settings.task_bundle_root, image_path
+                    )
                 progress = execute_existing_run(
                     session,
                     run_id,
@@ -389,9 +451,10 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
                     MediaAsset.relative_path == asset_path,
                 )
             )
+            snapshot = session.get(TaskSnapshot, asset.snapshot_id) if asset else None
         if asset is None:
             raise HTTPException(status_code=404, detail="media asset not found")
-        root = settings.task_bundle_root.resolve()
+        root = _bundle_root_for_snapshot(snapshot, settings.task_bundle_root, asset.relative_path)
         candidate = (root / Path(*PurePosixPath(asset.relative_path).parts)).resolve()
         try:
             candidate.relative_to(root)
@@ -476,9 +539,7 @@ th { background: #eee; }
 <section>
 <h2>Task snapshots</h2>
 <form id='snapshot-form'>
-  <label>Bundle root visible to the application
-    <input id='bundle-root' required placeholder='/data/task-bundles/example'>
-  </label>
+  <label>Task bundle<select id='bundle-root' required></select></label>
   <label>Manifest path
     <input id='manifest-path' value='manifest.jsonl'>
   </label>
@@ -593,7 +654,7 @@ th { background: #eee; }
 </section>
 
 <script>
-const state = {snapshots: [], configs: [], runs: [], comparisons: [], assignments: []};
+const state = {snapshots: [], configs: [], runs: [], comparisons: [], assignments: [], bundles: []};
 const $ = (id) => document.getElementById(id);
 
 function showStatus(text) { $('status').textContent = text; }
@@ -631,6 +692,8 @@ async function refreshRecords() {
   state.runs = await request('/api/runs');
   state.comparisons = await request('/api/comparisons');
   state.assignments = await request('/api/assignments');
+  state.bundles = await request('/api/task-bundles');
+  setOptions('bundle-root', state.bundles, (record) => record.name);
   setOptions('run-snapshot', state.snapshots,
     (record) => record.id + ' (' + record.task_count + ' tasks)');
   setOptions('comparison-snapshot', state.snapshots,

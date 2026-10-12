@@ -52,3 +52,4 @@ class BundleImportTests(unittest.TestCase):
         self.assertEqual([item.input_type for item in inputs], ["text", "image"])
         self.assertEqual(inputs[1].transform_metadata_json, {"resize": {"width": 320}})
         self.assertEqual(asset.relative_path, "media/example.svg")
+        self.assertEqual(first.notes_json, {"bundle_root": str(root.resolve())})

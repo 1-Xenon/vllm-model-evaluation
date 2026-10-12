@@ -35,7 +35,8 @@ cp examples/evaluation-bundle/media/example.svg \
 Set the bundle location:
 
 ```
-export BUNDLE_ROOT="$PWD/data/task-bundles/smoke-bundle"
+export BUNDLE_PARENT="$PWD/data/task-bundles"
+export BUNDLE_ROOT="$BUNDLE_PARENT/smoke-bundle"
 ```
 
 ## 3\. Start the application
@@ -49,7 +50,7 @@ cd /home/nic/projects/vllm-model-evaluation
 source .venv/bin/activate
 
 export VLLM_EVAL_RUNNER_TYPE=fake
-export VLLM_EVAL_TASK_BUNDLE_ROOT="$PWD/data/task-bundles/smoke-bundle"
+export VLLM_EVAL_TASK_BUNDLE_ROOT="$BUNDLE_PARENT"
 
 uvicorn vllm_evaluation.app:create_app \
   --factory \
@@ -407,7 +408,7 @@ Stop the fake-runner application with `Ctrl+C`, then restart it with:
 export VLLM_EVAL_RUNNER_TYPE=openai_compatible
 export VLLM_EVAL_RUNNER_ENDPOINT_URL=http://127.0.0.1:8001/v1/chat/completions
 export VLLM_EVAL_RUNNER_MODEL_NAME=Qwen/Qwen2.5-VL-7B-Instruct-AWQ
-export VLLM_EVAL_TASK_BUNDLE_ROOT="$PWD/data/task-bundles/smoke-bundle"
+export VLLM_EVAL_TASK_BUNDLE_ROOT="$BUNDLE_PARENT"
 
 uvicorn vllm_evaluation.app:create_app \
   --factory \

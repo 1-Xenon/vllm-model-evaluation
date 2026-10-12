@@ -71,6 +71,8 @@ exports_root = "./data/exports"
             page = operator_route.endpoint()
 
             self.assertIn("Import snapshot", page)
+            self.assertIn("<select id='bundle-root' required>", page)
+            self.assertIn("/api/task-bundles", page)
             self.assertIn("Create run", page)
             self.assertIn("Create comparison", page)
             self.assertIn("id='attempts-a' multiple required", page)

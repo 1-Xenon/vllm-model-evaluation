@@ -3,6 +3,9 @@
 ## Start the application
 
 - Copy `config.example.toml` to `config.toml` and configure storage and the runner.
+- Keep all task bundles as subdirectories of the configured task-bundle parent, normally
+  `/data/task-bundles`. The operator page discovers folders containing `manifest.jsonl` and
+  presents them in the snapshot-import dropdown.
 - Run `uvicorn vllm_evaluation.app:create_app --factory --reload` during development.
 - Open `/docs` for the operator API or `/` for the local landing page.
 
@@ -62,7 +65,8 @@ export VLLM_IMAGE="vllm/vllm-openai:latest"
 export MODEL_CACHE="$PROJECT_ROOT/data/huggingface"
 export VLLM_MAX_MODEL_LEN=4096
 export VLLM_GPU_MEMORY_UTILIZATION=0.90
-export BUNDLE_ROOT="$PROJECT_ROOT/data/task-bundles/live-smoke-bundle"
+export BUNDLE_PARENT="$PROJECT_ROOT/data/task-bundles"
+export BUNDLE_ROOT="$BUNDLE_PARENT/live-smoke-bundle"
 export DB_PATH="$PROJECT_ROOT/data/evaluation.db"
 ~~~
 
@@ -149,7 +153,7 @@ Run this in Terminal 2:
 export VLLM_EVAL_RUNNER_TYPE=openai_compatible
 export VLLM_EVAL_RUNNER_ENDPOINT_URL="$MODEL_ENDPOINT_URL"
 export VLLM_EVAL_RUNNER_MODEL_NAME="$MODEL_A_ID"
-export VLLM_EVAL_TASK_BUNDLE_ROOT="$BUNDLE_ROOT"
+export VLLM_EVAL_TASK_BUNDLE_ROOT="$BUNDLE_PARENT"
 
 uvicorn vllm_evaluation.app:create_app \
   --factory \
@@ -250,7 +254,7 @@ Stop the application in Terminal 2 with Ctrl+C. Restart it with:
 export VLLM_EVAL_RUNNER_TYPE=openai_compatible
 export VLLM_EVAL_RUNNER_ENDPOINT_URL="$MODEL_ENDPOINT_URL"
 export VLLM_EVAL_RUNNER_MODEL_NAME="$MODEL_B_ID"
-export VLLM_EVAL_TASK_BUNDLE_ROOT="$BUNDLE_ROOT"
+export VLLM_EVAL_TASK_BUNDLE_ROOT="$BUNDLE_PARENT"
 
 uvicorn vllm_evaluation.app:create_app \
   --factory \
@@ -432,7 +436,8 @@ ls -lh "$PROJECT_ROOT/data/exports/"
 - Model endpoint unavailable: run docker ps and docker logs for the active model container.
 - Model ID mismatch: compare the placeholder with curl http://127.0.0.1:8001/v1/models.
 - Image failure: use PNG, JPEG, or WebP rather than SVG.
-- Missing reviewer media: ensure VLLM_EVAL_TASK_BUNDLE_ROOT and BUNDLE_ROOT point to the same absolute directory.
+- Missing reviewer media: ensure VLLM_EVAL_TASK_BUNDLE_ROOT points to the task-bundle parent and the
+  selected/imported bundle remains a child directory containing its manifest and media files.
 - Comparison issues: inspect both progress and failure endpoints; failed or truncated attempts cannot form a normal blind pair.
 - Wrong model after switching: restart the application after changing VLLM_EVAL_RUNNER_MODEL_NAME.
 

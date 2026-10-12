@@ -53,6 +53,8 @@ def import_task_bundle(
         select(TaskSnapshot).where(TaskSnapshot.snapshot_hash == snapshot_hash)
     )
     if existing is not None:
+        if not existing.notes_json or existing.notes_json.get("bundle_root") != str(root):
+            existing.notes_json = {**(existing.notes_json or {}), "bundle_root": str(root)}
         return existing
 
     snapshot = TaskSnapshot(
@@ -60,6 +62,7 @@ def import_task_bundle(
         manifest_hash=manifest_hash,
         snapshot_hash=snapshot_hash,
         task_count=len(tasks),
+        notes_json={"bundle_root": str(root)},
     )
     session.add(snapshot)
     session.flush()
