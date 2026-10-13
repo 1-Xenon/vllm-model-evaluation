@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
+from .automation import AutomationBusy, AutomationManager, AutomationRequest
 from .config import load_settings, prepare_storage
 from .db import create_engine_from_settings, create_schema, create_session_factory, session_scope
 from .errors import ValidationError
@@ -113,6 +114,13 @@ def _serialize_comparison(comparison: ComparisonSession) -> dict[str, Any]:
     }
 
 
+def _bundle_manifest_path(bundle: Path) -> str | None:
+    for filename in ("manifest.jsonl", "tasks.jsonl"):
+        if (bundle / filename).is_file():
+            return filename
+    return None
+
+
 def _bundle_root_for_snapshot(
     snapshot: TaskSnapshot | None,
     configured_root: Path,
@@ -123,7 +131,7 @@ def _bundle_root_for_snapshot(
         return Path(stored_root).resolve()
 
     root = configured_root.resolve()
-    if (root / "manifest.jsonl").is_file():
+    if _bundle_manifest_path(root):
         return root
     if not root.is_dir():
         return root
@@ -133,7 +141,7 @@ def _bundle_root_for_snapshot(
         relative = Path(*PurePosixPath(relative_path).parts)
         matches = [child for child in children if (child / relative).is_file()]
     else:
-        matches = [child for child in children if (child / "manifest.jsonl").is_file()]
+        matches = [child for child in children if _bundle_manifest_path(child)]
     return matches[0] if len(matches) == 1 else root
 
 
@@ -174,6 +182,35 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
     app = FastAPI(title=settings.app_name, version="0.1.0")
     app.state.settings = settings
     app.state.session_factory = factory
+    automation = AutomationManager(settings, factory)
+    app.state.automation = automation
+
+    @app.get("/api/automations")
+    def automation_jobs() -> list[dict[str, Any]]:
+        return automation.list_jobs()
+
+    @app.post("/api/automations", status_code=202)
+    def start_automation(payload: AutomationRequest) -> dict[str, Any]:
+        try:
+            return automation.start(payload)
+        except AutomationBusy as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (ValueError, ValidationError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/automations/{job_id}")
+    def automation_status(job_id: str) -> dict[str, Any]:
+        try:
+            return automation.get(job_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/automations/{job_id}/cancel")
+    def cancel_automation(job_id: str) -> dict[str, Any]:
+        try:
+            return automation.cancel(job_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -198,9 +235,9 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
         if not root.is_dir():
             return []
         return [
-            {"id": str(bundle), "name": bundle.name, "manifest_path": "manifest.jsonl"}
+            {"id": str(bundle), "name": bundle.name, "manifest_path": manifest_path}
             for bundle in sorted(root.iterdir(), key=lambda path: path.name.lower())
-            if bundle.is_dir() and (bundle / "manifest.jsonl").is_file()
+            if bundle.is_dir() and (manifest_path := _bundle_manifest_path(bundle))
         ]
 
     @app.get("/api/model-configs")
@@ -224,7 +261,11 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
                 ) from exc
             with session_scope(factory) as session:
                 snapshot = import_bundle(
-                    session, bundle_root, payload.get("manifest_path", "manifest.jsonl")
+                    session,
+                    bundle_root,
+                    payload.get("manifest_path")
+                    or _bundle_manifest_path(bundle_root)
+                    or "manifest.jsonl",
                 )
                 return _serialize_snapshot(snapshot)
         except (KeyError, ValueError) as exc:
@@ -256,10 +297,17 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
     def execute(run_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}
         try:
-            with session_scope(factory) as session:
+            with automation.execution_slot(), session_scope(factory) as session:
+                run = session.get(ModelRun, run_id)
+                if run is None:
+                    raise ValueError(f"model run not found: {run_id}")
+                runner_settings = replace(
+                    settings,
+                    runner_endpoint_url=run.model_config.endpoint_url,
+                    runner_model_name=run.model_config.served_model_name,
+                )
                 asset_root = payload.get("asset_root")
                 if not asset_root:
-                    run = session.get(ModelRun, run_id)
                     snapshot = session.get(TaskSnapshot, run.snapshot_id) if run else None
                     image_path = None
                     if run:
@@ -277,7 +325,7 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
                 progress = execute_existing_run(
                     session,
                     run_id,
-                    create_runner(settings),
+                    create_runner(runner_settings),
                     config=ExecutionConfig(
                         asset_root=Path(asset_root) if asset_root else settings.task_bundle_root,
                         concurrency=int(payload.get("concurrency", settings.runner_concurrency)),
@@ -292,6 +340,8 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
                     ),
                 )
                 return asdict(progress)
+        except AutomationBusy as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -544,6 +594,42 @@ th { background: #eee; }
   Reviewer judgment submission remains available at <a href='/review'>/review</a>.</p>
 <p><a href='/docs'>OpenAPI documentation</a></p>
 <p id='status' class='status' role='status' aria-live='polite'></p>
+<p id='runner-mode' class='hint'></p>
+
+<section>
+<h2>Automated evaluation</h2>
+<p class='hint'>Choose one bundle and at least two models. Each model runs the selected bundle
+  before the next model loads. Every model pair gets a frozen comparison.</p>
+<form id='automation-form'>
+  <div class='grid'>
+    <label>Name<input id='automation-name' required value='Evaluation batch'></label>
+    <label>Assignment seed<input id='automation-seed' required value='automation'></label>
+    <label>Bundle<select id='automation-bundles' required></select></label>
+    <label>Models<select id='automation-models' multiple required size='5'></select></label>
+    <label>Model startup timeout (seconds)
+      <input id='automation-timeout' type='number' min='10' max='7200' value='900' required>
+    </label>
+  </div>
+  <label><input id='automation-swap' type='checkbox' checked>
+    Automatically swap the local GPU model</label>
+  <p class='hint'>Automatic swapping replaces the evaluation model container. Uncheck it to use
+    models already running at their configured endpoints. Select multiple models with Ctrl/Cmd
+    or Shift. Models run in the order shown. The job stops if any task fails; incomplete
+    comparisons are not frozen.</p>
+  <p id='automation-plan' class='hint'></p>
+  <button id='automation-start' type='submit'>Start automation</button>
+</form>
+<label>Automation history<select id='automation-job'></select></label>
+<button id='automation-refresh' type='button'>Refresh automation</button>
+<button id='automation-stop' type='button' disabled>Stop automation</button>
+<p class='hint'>Progress updates automatically. Stop takes effect after the current request
+  or startup command finishes. Closing this page does not stop the job; keep the evaluation
+  app running.</p>
+<p id='automation-status' role='status' aria-live='polite'></p>
+<div id='automation-results'></div>
+<details><summary>Automation details</summary>
+  <pre id='automation-output' class='output'></pre></details>
+</section>
 
 <section>
 <h2>Task snapshots</h2>
@@ -605,6 +691,7 @@ th { background: #eee; }
 <p class='hint'>Select completed runs from the same snapshot. Successful attempts are loaded
   automatically. Select the corresponding successful task attempts in both lists. Use Ctrl/Cmd
   or Shift to select multiple items.</p>
+<p id='comparison-runs-hint' class='hint'></p>
 <form id='comparison-form'>
   <div class='grid'>
     <label>Snapshot<select id='comparison-snapshot' required></select></label>
@@ -686,16 +773,31 @@ async function request(path, options = {}) {
 
 function setOptions(id, records, label) {
   const select = $(id);
+  const previous = select.value;
+  const selected = new Set(Array.from(select.selectedOptions).map((option) => option.value));
   select.replaceChildren();
   records.forEach((record) => {
     const option = document.createElement('option');
     option.value = record.id ?? record.assignment_id;
     option.textContent = label(record);
+    if (select.multiple) option.selected = selected.has(option.value);
     select.append(option);
   });
+  if (!select.multiple && Array.from(select.options).some((option) => option.value === previous)) {
+    select.value = previous;
+  }
+}
+
+function selectBundleManifest() {
+  const bundle = state.bundles.find((record) => record.id === $('bundle-root').value);
+  $('manifest-path').value = bundle ? bundle.manifest_path : '';
 }
 
 async function refreshRecords() {
+  const health = await request('/health');
+  $('runner-mode').textContent = health.runner_type === 'fake'
+    ? 'Fake runner enabled: runs return simulated answers without calling a model.'
+    : 'Live runner: runs call the endpoint in the selected model configuration.';
   state.snapshots = await request('/api/snapshots');
   state.configs = await request('/api/model-configs');
   state.runs = await request('/api/runs');
@@ -703,15 +805,17 @@ async function refreshRecords() {
   state.assignments = await request('/api/assignments');
   state.bundles = await request('/api/task-bundles');
   setOptions('bundle-root', state.bundles, (record) => record.name);
+  selectBundleManifest();
+  setOptions('automation-bundles', state.bundles, (record) => record.name);
+  setOptions('automation-models', state.configs, (record) => record.display_name);
+  updateAutomationPlan();
   setOptions('run-snapshot', state.snapshots,
     (record) => record.bundle_name || 'bundle not recorded');
-  setOptions('comparison-snapshot', state.snapshots,
+  setOptions('comparison-snapshot', [...state.snapshots].reverse(),
     (record) => record.bundle_name || 'bundle not recorded');
   setOptions('run-config', state.configs,
     (record) => record.display_name);
   const runLabel = (record) => record.run_name;
-  setOptions('comparison-run-a', state.runs, runLabel);
-  setOptions('comparison-run-b', state.runs, runLabel);
   setOptions('run-id', state.runs, runLabel);
   setOptions('assignment-comparison', state.comparisons.filter(
     (record) => record.status === 'frozen' || record.status === 'open'),
@@ -722,21 +826,55 @@ async function refreshRecords() {
     (record) => record.name + ' [' + record.status + '] ' + record.id);
   showJson('snapshots-output', state.snapshots);
   showJson('configs-output', state.configs);
+  await refreshComparisonRuns();
 }
 
+async function refreshComparisonRuns() {
+  const runs = state.runs.filter((run) =>
+    run.snapshot_id === $('comparison-snapshot').value && run.status === 'completed');
+  const label = (run) => run.run_name;
+  setOptions('comparison-run-a', runs, label);
+  setOptions('comparison-run-b', runs, label);
+  if ($('comparison-run-a').value === $('comparison-run-b').value) {
+    const a = runs.find((run) => run.id === $('comparison-run-a').value);
+    const b = runs.find((run) => a && run.model_config_id !== a.model_config_id) ||
+      runs.find((run) => run.id !== $('comparison-run-a').value);
+    $('comparison-run-b').value = b ? b.id : '';
+  }
+  $('comparison-runs-hint').textContent = runs.length < 2
+    ? 'Complete two runs on this snapshot before creating a comparison.'
+    : 'Only completed runs for the selected snapshot are shown.';
+  await Promise.all([
+    loadAttempts($('comparison-run-a').value, 'attempts-a'),
+    loadAttempts($('comparison-run-b').value, 'attempts-b')
+  ]);
+}
+
+const attemptLoads = {};
 async function loadAttempts(runId, targetId) {
+  const select = $(targetId);
+  const loadId = (attemptLoads[targetId] || 0) + 1;
+  attemptLoads[targetId] = loadId;
+  select.replaceChildren();
+  select.dataset.runId = '';
   if (!runId) return;
   const attempts = await request('/api/runs/' + encodeURIComponent(runId) + '/attempts');
-  const select = $(targetId);
-  select.replaceChildren();
+  if (attemptLoads[targetId] !== loadId) return;
+  const latest = new Map();
   attempts.filter((attempt) => attempt.status === 'succeeded').forEach((attempt) => {
+    const previous = latest.get(attempt.task_id);
+    if (!previous || attempt.attempt_number > previous.attempt_number) {
+      latest.set(attempt.task_id, attempt);
+    }
+  });
+  latest.forEach((attempt) => {
     const option = document.createElement('option');
     option.value = attempt.id;
     option.textContent = attempt.task_id + ' — ' + attempt.id;
     option.selected = true;
     select.append(option);
   });
-  showJson('comparison-output', attempts);
+  select.dataset.runId = runId;
 }
 
 function idsFromSelect(id) {
@@ -758,6 +896,7 @@ async function submitJsonForm(event, path, fields, outputId) {
   } catch (error) { showStatus(error.message); }
 }
 
+$('bundle-root').addEventListener('change', selectBundleManifest);
 $('snapshot-form').addEventListener('submit', (event) => submitJsonForm(
   event, '/api/snapshots/import', [
     ['bundle_root', 'bundle-root'], ['manifest_path', 'manifest-path']],
@@ -813,14 +952,27 @@ $('attempts-run').addEventListener('click', async () => {
   catch (error) { showStatus(error.message); }
 });
 
+$('comparison-snapshot').addEventListener('change', () =>
+  refreshComparisonRuns().catch((error) => showStatus(error.message)));
 $('comparison-run-a').addEventListener('change', () => loadAttempts(
-  $('comparison-run-a').value, 'attempts-a'));
+  $('comparison-run-a').value, 'attempts-a').catch((error) => showStatus(error.message)));
 $('comparison-run-b').addEventListener('change', () => loadAttempts(
-  $('comparison-run-b').value, 'attempts-b'));
+  $('comparison-run-b').value, 'attempts-b').catch((error) => showStatus(error.message)));
 
 $('comparison-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
+    const runA = $('comparison-run-a').value;
+    const runB = $('comparison-run-b').value;
+    if (!runA || !runB || runA === runB) {
+      throw new Error('Select two different completed runs for this snapshot.');
+    }
+    if ($('attempts-a').dataset.runId !== runA || $('attempts-b').dataset.runId !== runB) {
+      throw new Error('Wait for the selected runs to finish loading their attempts.');
+    }
+    if (!idsFromSelect('attempts-a').length || !idsFromSelect('attempts-b').length) {
+      throw new Error('Select successful attempts for both runs.');
+    }
     const result = await request('/api/comparisons', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
@@ -836,7 +988,10 @@ $('comparison-form').addEventListener('submit', async (event) => {
     $('judgment-comparison').value = result.comparison_id;
     $('export-comparison').value = result.comparison_id;
     $('export-path').value = '/data/exports/comparison-' + result.comparison_id + '.jsonl';
-    showJson('comparison-output', result); showStatus('Comparison created.');
+    showJson('comparison-output', result);
+    showStatus(result.issues.length
+      ? 'Comparison created with excluded tasks. Review the issues before freezing.'
+      : 'Comparison created.');
   } catch (error) { showStatus(error.message); }
 });
 
@@ -925,9 +1080,128 @@ $('export-form').addEventListener('submit', async (event) => {
   } catch (error) { showStatus(error.message); }
 });
 
+
+let automationTimer;
+let automationRevision = 0;
+let displayedAutomationStatus = '';
+
+function updateAutomationPlan() {
+  const bundles = idsFromSelect('automation-bundles').length;
+  const models = idsFromSelect('automation-models').length;
+  $('automation-plan').textContent = bundles + ' bundle, ' + models + ' models: ' +
+    (bundles * models) + ' runs and ' + (bundles * models * (models - 1) / 2) + ' comparisons.';
+}
+
+function renderAutomation(job) {
+  const active = ['queued', 'running', 'cancelling'].includes(job.status);
+  $('automation-stop').disabled = !active || job.cancel_requested;
+  const progress = job.current_run_progress;
+  const count = progress
+    ? ' — ' + progress.completed_tasks + '/' + progress.total_tasks + ' tasks' : '';
+  $('automation-status').textContent = job.name + ': ' + job.status + ' — ' +
+    job.progress.stage + count + (job.error_message ? ' — ' + job.error_message : '');
+  showJson('automation-output', job);
+  const results = $('automation-results');
+  results.replaceChildren();
+  const completed = job.progress.runs.filter((run) => run.status === 'completed').length;
+  const summary = document.createElement('p');
+  summary.textContent = completed + '/' + job.progress.runs.length + ' runs completed; ' +
+    job.progress.comparisons.length + ' comparisons frozen.';
+  results.append(summary);
+  job.progress.comparisons.forEach((comparison) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = comparison.name + ' (' + comparison.status + ')';
+    button.addEventListener('click', async () => {
+      try {
+        await refreshRecords();
+        $('comparison-id').value = comparison.id;
+        $('assignment-comparison').value = comparison.id;
+        $('judgment-comparison').value = comparison.id;
+        $('export-comparison').value = comparison.id;
+        $('assignment-form').scrollIntoView({behavior: 'smooth'});
+      } catch (error) { showStatus(error.message); }
+    });
+    results.append(button);
+  });
+}
+
+async function refreshAutomation(selectedId) {
+  clearTimeout(automationTimer);
+  const revision = ++automationRevision;
+  try {
+    const jobs = await request('/api/automations');
+    if (revision !== automationRevision) return;
+    setOptions('automation-job', jobs, (job) =>
+      job.name + ' — ' + job.status + ' — ' + job.created_at);
+    if (selectedId && jobs.some((job) => job.id === selectedId)) {
+      $('automation-job').value = selectedId;
+    }
+    $('automation-start').disabled = jobs.some((job) =>
+      ['queued', 'running', 'cancelling'].includes(job.status));
+    const id = $('automation-job').value;
+    if (!id) {
+      $('automation-status').textContent = 'No automation jobs yet.';
+      $('automation-stop').disabled = true;
+      return;
+    }
+    const job = await request('/api/automations/' + encodeURIComponent(id));
+    if (revision !== automationRevision) return;
+    renderAutomation(job);
+    const stateKey = job.id + ':' + job.status;
+    if (displayedAutomationStatus !== stateKey &&
+        !['queued', 'running', 'cancelling'].includes(job.status)) {
+      await refreshRecords();
+    }
+    displayedAutomationStatus = stateKey;
+  } catch (error) { $('automation-status').textContent = error.message; }
+  finally {
+    if (revision === automationRevision) {
+      automationTimer = setTimeout(() => refreshAutomation(), 3000);
+    }
+  }
+}
+
+$('automation-bundles').addEventListener('change', updateAutomationPlan);
+$('automation-models').addEventListener('change', updateAutomationPlan);
+$('automation-job').addEventListener('change', () => refreshAutomation($('automation-job').value));
+$('automation-refresh').addEventListener('click', () => refreshAutomation());
+$('automation-stop').addEventListener('click', async () => {
+  try {
+    const id = $('automation-job').value;
+    await request('/api/automations/' + encodeURIComponent(id) + '/cancel', {method: 'POST'});
+    await refreshAutomation(id);
+  } catch (error) { showStatus(error.message); }
+});
+$('automation-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const bundles = idsFromSelect('automation-bundles');
+  const models = idsFromSelect('automation-models');
+  if (bundles.length !== 1 || models.length < 2) {
+    showStatus('Select one bundle and at least two models.');
+    return;
+  }
+  $('automation-start').disabled = true;
+  try {
+    const job = await request('/api/automations', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: $('automation-name').value, bundles,
+        model_config_ids: models, swap_models: $('automation-swap').checked,
+        ready_timeout_seconds: Number($('automation-timeout').value),
+        assignment_seed: $('automation-seed').value})
+    });
+    showStatus('Automation started. You can follow its progress below.');
+    await refreshAutomation(job.id);
+    await refreshRecords();
+  } catch (error) {
+    showStatus(error.message);
+    $('automation-start').disabled = false;
+  }
+});
+
 $('refresh-button').addEventListener('click', () => refreshRecords().catch(
   (error) => showStatus(error.message)));
-refreshRecords().catch((error) => showStatus(error.message));
+refreshRecords().then(() => refreshAutomation()).catch((error) => showStatus(error.message));
 </script>
 </body>
 </html>"""

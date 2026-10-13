@@ -7,6 +7,7 @@ import json
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
+from http.client import HTTPException
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -194,11 +195,35 @@ class OpenAICompatibleRunner(ModelRunner):
                     total_latency_seconds=time.monotonic() - started_at,
                 )
         except HTTPError as exc:
+            # Bound diagnostics: proxies can return very large HTML error pages.
+            try:
+                with exc:
+                    body = exc.read(16_384).decode("utf-8", errors="replace").strip()
+            except (OSError, HTTPException):
+                body = ""
+            raw_response = None
+            detail = body
+            if body:
+                try:
+                    parsed = json.loads(body)
+                except ValueError:
+                    raw_response = {"body": body}
+                else:
+                    raw_response = parsed if isinstance(parsed, dict) else {"body": parsed}
+                    if isinstance(parsed, dict):
+                        error = parsed.get("error", parsed)
+                        if isinstance(error, dict) and isinstance(error.get("message"), str):
+                            detail = error["message"]
+                        elif isinstance(error, str):
+                            detail = error
+            message = f"endpoint returned HTTP {exc.code}"
             return RunnerResult(
                 status=AttemptStatus.FAILED,
+                raw_response=raw_response,
                 error_code=f"http_{exc.code}",
-                error_message=f"endpoint returned HTTP {exc.code}",
+                error_message=f"{message}: {detail}" if detail else message,
                 retryable=exc.code == 429 or exc.code >= 500,
+                total_latency_seconds=time.monotonic() - started_at,
             )
         except TimeoutError:
             return RunnerResult(

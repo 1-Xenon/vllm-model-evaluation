@@ -91,6 +91,19 @@ class TaskSnapshot(Base, BaseModel):
     comparison_sessions: Mapped[list[ComparisonSession]] = relationship(back_populates="snapshot")
 
 
+class AutomationJob(Base, BaseModel):
+    __tablename__ = "automation_jobs"
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    progress_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Task(Base, BaseModel):
     __tablename__ = "tasks"
     __table_args__ = (

@@ -15,7 +15,7 @@ results_root = "./data/results"
 exports_root = "./data/exports"
 
 [runner]
-type = "fake"
+type = "openai_compatible"
 endpoint_url = ""
 model_name = ""
 auth_token_env = ""
@@ -25,3 +25,6 @@ retry_backoff_seconds = 0.0
 concurrency = 1
 warmup_count = 0
 streaming = true
+
+[automation]
+serve_script = "./model-serving/serve-model.sh"

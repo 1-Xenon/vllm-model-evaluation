@@ -46,7 +46,11 @@ def _attempts_by_task(session: Session, attempt_ids: list[str]) -> dict[str, Gen
             .where(GenerationAttempt.id.in_(attempt_ids))
         )
     )
-    return {attempt.task.stable_task_id: attempt for attempt in attempts}
+    if {attempt.id for attempt in attempts} != set(attempt_ids):
+        raise ValueError("one or more selected attempts no longer exist; reload the runs")
+    if len({attempt.task_id for attempt in attempts}) != len(attempts):
+        raise ValueError("select only one attempt per task on each side")
+    return {attempt.task_id: attempt for attempt in attempts}
 
 
 def create_comparison(
@@ -63,6 +67,18 @@ def create_comparison(
 
     a_by_task = _attempts_by_task(session, model_a_attempt_ids)
     b_by_task = _attempts_by_task(session, model_b_attempt_ids)
+    if not a_by_task or not b_by_task:
+        raise ValueError("select successful attempts from both model runs")
+    if any(
+        attempt.run.snapshot_id != snapshot_id
+        for attempt in (*a_by_task.values(), *b_by_task.values())
+    ):
+        raise ValueError(
+            "selected attempts belong to a different snapshot; "
+            "select the matching snapshot and reload both runs"
+        )
+    if set(model_a_attempt_ids) & set(model_b_attempt_ids):
+        raise ValueError("select different attempts for model A and model B")
     tasks = list(
         session.scalars(
             select(Task).where(Task.snapshot_id == snapshot_id).order_by(Task.task_order)
@@ -74,25 +90,14 @@ def create_comparison(
         assignment_seed=assignment_seed,
         created_by=created_by,
     )
-    session.add(comparison)
-    session.flush()
     issues: list[SelectionIssue] = []
     for task in tasks:
-        left = a_by_task.get(task.stable_task_id)
-        right = b_by_task.get(task.stable_task_id)
+        left = a_by_task.get(task.id)
+        right = b_by_task.get(task.id)
         if left is None or right is None:
             issues.append(
                 SelectionIssue(
                     task.stable_task_id, "missing_pair", "both model attempts are required"
-                )
-            )
-            continue
-        if left.run.snapshot_id != snapshot_id or right.run.snapshot_id != snapshot_id:
-            issues.append(
-                SelectionIssue(
-                    task.stable_task_id,
-                    "snapshot_mismatch",
-                    "attempts must use the comparison snapshot",
                 )
             )
             continue
@@ -108,6 +113,11 @@ def create_comparison(
         comparison.items.append(
             ComparisonItem(task_id=task.id, left_attempt_id=left.id, right_attempt_id=right.id)
         )
+    if not comparison.items:
+        raise ValueError(
+            "no complete successful task pairs; select matching task attempts from both runs"
+        )
+    session.add(comparison)
     session.flush()
     return SelectionResult(session=comparison, issues=tuple(issues))
 

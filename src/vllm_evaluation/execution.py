@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
@@ -315,6 +316,7 @@ def execute_run(
     runner: ModelRunner,
     *,
     config: ExecutionConfig,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> RunProgress:
     """Execute a run, committing every completed task's attempts as progress."""
 
@@ -343,6 +345,11 @@ def execute_run(
             asset_root=config.asset_root,
         )
         for _ in range(config.warmup_count):
+            if should_cancel and should_cancel():
+                run.status = RunStatus.CANCELLED.value
+                run.finished_at = utc_now()
+                session.commit()
+                return progress_for_run(session, run)
             warmup_result = runner.generate(warmup_request)
             if warmup_result.status not in {
                 AttemptStatus.SUCCEEDED,
@@ -387,6 +394,11 @@ def execute_run(
 
     if config.concurrency == 1:
         for task, request in work:
+            if should_cancel and should_cancel():
+                run.status = RunStatus.CANCELLED.value
+                run.finished_at = utc_now()
+                session.commit()
+                return progress_for_run(session, run)
             persist(
                 task,
                 _execute_request(
