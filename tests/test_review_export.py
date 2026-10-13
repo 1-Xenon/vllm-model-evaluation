@@ -122,8 +122,18 @@ class ReviewAndExportTests(unittest.TestCase):
                 )
                 run_a = repo.create_run(session, snapshot=snapshot, model_config=model_a)
                 run_b = repo.create_run(session, snapshot=snapshot, model_config=model_b)
-                execute_run(session, run_a, FakeRunner(answer="A"), config=ExecutionConfig())
-                execute_run(session, run_b, FakeRunner(answer="B"), config=ExecutionConfig())
+                execute_run(
+                    session,
+                    run_a,
+                    FakeRunner(answer='{"type":"person","bbox":[0.1,0.2,0.6,0.9]}'),
+                    config=ExecutionConfig(),
+                )
+                execute_run(
+                    session,
+                    run_b,
+                    FakeRunner(answer='{"type":"equipment","bbox_2d":"[10,20,30,40]"}'),
+                    config=ExecutionConfig(),
+                )
                 attempts = list(
                     session.scalars(select(GenerationAttempt).order_by(GenerationAttempt.run_id))
                 )
@@ -142,6 +152,14 @@ class ReviewAndExportTests(unittest.TestCase):
                 view = reviewer_view(session, first.id)
                 self.assertNotIn("Model A", str(view))
                 self.assertNotIn("http://a.invalid", str(view))
+                for side in ("left", "right"):
+                    box = view[side]["annotations"]["boxes"][0]
+                    if '"person"' in view[side]["answer"]:
+                        self.assertEqual(box["label"], "person")
+                        self.assertEqual(box["coordinates"], [0.1, 0.2, 0.6, 0.9])
+                    else:
+                        self.assertEqual(box["label"], "equipment")
+                        self.assertEqual(box["coordinates"], [10, 20, 30, 40])
                 submit_judgment(
                     session,
                     first.id,

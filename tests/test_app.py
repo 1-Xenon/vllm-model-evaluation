@@ -193,6 +193,9 @@ exports_root = "./data/exports"
             self.assertIn("<select id='assignment' required>", page)
             self.assertIn("fetch('/api/review/assignments')", page)
             self.assertIn("Task image", page)
+            self.assertIn("id='left-images'", page)
+            self.assertIn("id='right-images'", page)
+            self.assertNotIn("Coordinate scale", page)
 
     def test_operator_page_contains_workflow_and_export_controls(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

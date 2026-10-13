@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
+from .bounding_boxes import extract_bounding_boxes
 from .errors import ValidationError
 from .models import (
     AssignmentStatus,
@@ -220,11 +221,13 @@ def reviewer_view(session: Session, assignment_id: str) -> dict[str, Any]:
             "inputs": inputs,
         },
         "left": {
+            "annotations": extract_bounding_boxes(assignment.left_attempt.final_answer),
             "answer": assignment.left_attempt.final_answer,
             "reasoning": assignment.left_attempt.reasoning,
             "status": assignment.left_attempt.status,
         },
         "right": {
+            "annotations": extract_bounding_boxes(assignment.right_attempt.final_answer),
             "answer": assignment.right_attempt.final_answer,
             "reasoning": assignment.right_attempt.reasoning,
             "status": assignment.right_attempt.status,

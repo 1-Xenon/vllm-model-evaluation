@@ -1234,6 +1234,21 @@ legend { font-weight: 600; padding: 0 .35rem; }
 .answers { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); }
 .answer-panel { border: 1px solid #bbb; padding: 1rem; }
 .answer-panel h3 { margin-top: 0; }
+.answer-panel { min-width: 0; }
+.annotation-controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; }
+.annotation-controls label { font-size: .9rem; }
+.annotation-note { font-size: .9rem; color: #444; }
+.annotated-figure { margin: 1rem 0; }
+.annotated-image { position: relative; width: 100%; }
+.annotated-image img { display: block; width: 100%; height: auto; }
+.box-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.bbox-mark { position: absolute; box-sizing: border-box; border: 2px solid; }
+.bbox-label { position: absolute; top: 0; left: 0; color: white; padding: 1px 4px;
+  font-size: 12px; line-height: 1.4; white-space: nowrap; max-width: 15rem;
+  overflow: hidden; text-overflow: ellipsis; }
+.box-legend { padding-left: 1.4rem; font-size: .9rem; }
+.box-legend li { margin: .25rem 0; }
+
 .choices { display: flex; flex-wrap: wrap; gap: 1rem; }
 .choices label { display: inline-block; }
 .hidden { display: none; }
@@ -1261,8 +1276,10 @@ legend { font-weight: 600; padding: 0 .35rem; }
     <h2 id='answers-heading'>Anonymous answers</h2>
     <div class='answers'>
       <article class='answer-panel'><h3>Left</h3>
+        <div id='left-images'></div>
         <div id='left-answer' class='answer'></div></article>
       <article class='answer-panel'><h3>Right</h3>
+        <div id='right-images'></div>
         <div id='right-answer' class='answer'></div></article>
     </div>
   </section>
@@ -1363,6 +1380,140 @@ function renderInputs(inputs) {
   });
 }
 
+function annotationColor(label) {
+  const colors = ['#b91c1c', '#1d4ed8', '#047857', '#7e22ce', '#9a3412', '#0e7490'];
+  let hash = 0;
+  for (const char of label.toLowerCase()) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return colors[hash % colors.length];
+}
+
+function boxPercentages(box, width, height) {
+  const c = box.coordinates;
+  if (!Array.isArray(c) || c.length !== 4 || !c.every(Number.isFinite)) return null;
+  let unit = box.unit;
+  if (!unit || unit === 'auto') unit = c.every((n) => n >= 0 && n <= 1)
+    ? 'normalized' : 'pixels';
+  const scale = {normalized: 1, '1000': 1000, percent: 100}[unit];
+  const xScale = scale || width;
+  const yScale = scale || height;
+  if (!(xScale > 0 && yScale > 0)) return null;
+  const [x1, y1, x2, y2] = [c[0] / xScale, c[1] / yScale, c[2] / xScale, c[3] / yScale];
+  if (x1 < 0 || y1 < 0 || x2 > 1 || y2 > 1 || x2 <= x1 || y2 <= y1) return null;
+  return {left: x1 * 100, top: y1 * 100, width: (x2 - x1) * 100,
+    height: (y2 - y1) * 100};
+}
+
+function annotationImageIndex(box, images, unassigned) {
+  if (!box.image) return images.length === 1 ? 0 : Number(unassigned);
+  if (Number.isInteger(box.image.index)) return box.image.index;
+  if (typeof box.image.path === 'string') {
+    const exact = images.findIndex((image) => image.relative_path === box.image.path);
+    if (exact >= 0) return exact;
+    const matches = images.map((image, index) => ({image, index})).filter(({image}) =>
+      image.relative_path.split('/').pop() === box.image.path);
+    return matches.length === 1 ? matches[0].index : -1;
+  }
+  return -1;
+}
+
+function renderAnnotatedImages(side, inputs, annotations) {
+  const root = document.getElementById(side + '-images');
+  root.replaceChildren();
+  const images = inputs.filter((input) => input.type === 'image' && input.url);
+  if (!images.length) return;
+  const boxes = annotations?.boxes || [];
+  const controls = document.createElement('div');
+  controls.className = 'annotation-controls';
+  const toggleLabel = document.createElement('label');
+  const toggle = document.createElement('input');
+  toggle.type = 'checkbox'; toggle.checked = true;
+  toggleLabel.append(toggle, ' Show boxes');
+  controls.append(toggleLabel);
+  const source = document.createElement('select');
+  source.value = '-1';
+  if (images.length > 1) {
+    const label = document.createElement('label');
+    label.textContent = 'Boxes without an image reference ';
+    const option = document.createElement('option');
+    option.value = '-1'; option.textContent = 'Choose an image'; source.append(option);
+    images.forEach((input, index) => {
+      const option = document.createElement('option');
+      option.value = String(index); option.textContent = 'Image ' + (index + 1);
+      source.append(option);
+    });
+    label.append(source); controls.append(label);
+  }
+  const note = document.createElement('p');
+  note.className = 'annotation-note';
+  root.append(controls, note);
+  const figures = images.map((input, index) => {
+    const figure = document.createElement('figure');
+    figure.className = 'annotated-figure';
+    const caption = document.createElement('figcaption');
+    caption.textContent = side === 'left' ? 'Left — image ' : 'Right — image ';
+    caption.textContent += index + 1;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'annotated-image';
+    const image = document.createElement('img');
+    image.alt = (side === 'left' ? 'Left' : 'Right') + ' answer annotations, image ' + (index + 1);
+    const layer = document.createElement('div');
+    layer.className = 'box-layer'; layer.setAttribute('aria-hidden', 'true');
+    wrapper.append(image, layer);
+    const legend = document.createElement('ol');
+    legend.className = 'box-legend';
+    figure.append(caption, wrapper, legend); root.append(figure);
+    return {image, layer, legend, input};
+  });
+  function redraw() {
+    let shown = 0, skipped = 0, unassigned = 0;
+    figures.forEach(({layer, legend}) => {
+      layer.replaceChildren(); legend.replaceChildren();
+      layer.hidden = !toggle.checked;
+    });
+    boxes.forEach((box, index) => {
+      const imageIndex = annotationImageIndex(box, images, source.value);
+      const figure = figures[imageIndex];
+      if (!figure) { unassigned++; return; }
+      const {image, layer, legend} = figure;
+      if (!image.naturalWidth) return;
+      const coords = boxPercentages(box, image.naturalWidth, image.naturalHeight);
+      if (!coords) { skipped++; return; }
+      const label = box.label || 'Subject';
+      const color = annotationColor(label);
+      const mark = document.createElement('div');
+      mark.className = 'bbox-mark'; mark.style.borderColor = color;
+      Object.entries(coords).forEach(([key, value]) => { mark.style[key] = value + '%'; });
+      const tag = document.createElement('span');
+      tag.className = 'bbox-label'; tag.style.backgroundColor = color;
+      tag.textContent = (index + 1) + ': ' + label;
+      mark.append(tag); layer.append(mark);
+      const entry = document.createElement('li');
+      entry.value = index + 1;
+      entry.textContent = label + ' [' + box.coordinates.join(', ') + ']';
+      entry.style.color = color;
+      legend.append(entry); shown++;
+    });
+    const messages = [boxes.length ? shown + '/' + boxes.length + ' boxes drawn.'
+      : 'No usable bounding boxes found in this answer.'];
+    if (skipped) messages.push(skipped + ' outside image bounds at the automatic scale; skipped.');
+    if (unassigned) messages.push(unassigned + ' without a matching image; choose its source.');
+    if (figures.some(({image}) => image.dataset.failed)) {
+      messages.push('An image could not be loaded.');
+    }
+    else if (figures.some(({image}) => !image.naturalWidth)) messages.push('Loading images…');
+    messages.push(...(annotations?.warnings || []));
+    note.textContent = messages.join(' ');
+  }
+  figures.forEach(({image, input}) => {
+    image.addEventListener('load', redraw);
+    image.addEventListener('error', () => { image.dataset.failed = 'true'; redraw(); });
+    image.src = input.url;
+  });
+  toggle.addEventListener('change', redraw);
+  source.addEventListener('change', redraw);
+  redraw();
+}
+
 function renderReview(data) {
   currentAssignmentId = data.assignment_id;
   document.getElementById('category').textContent = data.task.category || '';
@@ -1370,6 +1521,8 @@ function renderReview(data) {
   document.getElementById('left-answer').textContent = data.left.answer || '';
   document.getElementById('right-answer').textContent = data.right.answer || '';
   renderInputs(data.task.inputs || []);
+  renderAnnotatedImages('left', data.task.inputs || [], data.left.annotations);
+  renderAnnotatedImages('right', data.task.inputs || [], data.right.annotations);
   review.classList.remove('hidden');
   judgmentForm.reset();
   document.querySelector('input[name="disposition"][value="complete"]').checked = true;

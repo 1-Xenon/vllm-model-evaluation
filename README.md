@@ -92,6 +92,23 @@ before starting a fresh job. Keep the app running: an app restart marks unfinish
 preserving completed results rather than automatically repeating model swaps. The new
 `automation_jobs` table is created on app startup, or by `alembic upgrade head` for migrated databases.
 
+## Bounding boxes in blind review
+
+The review page draws each answer's boxes on its own copy of the task image, under **Left** and
+**Right**. Numbered labels and legends identify subject types. The original answers and images
+remain unchanged, and annotations follow the anonymous left/right assignment.
+
+The display accepts `bbox`, `bbox_2d`, `bounding_box`, common spelling/case variations, numeric
+arrays or strings, and JSON in Markdown code fences. Four coordinates default to
+`[xmin, ymin, xmax, ymax]`; named coordinates and explicit `bbox_format` values `xywh` or `cxcywh`
+are also supported. Empty, invalid, and reversed boxes are skipped.
+
+Coordinate scaling is automatic: explicit output metadata takes priority, otherwise coordinates
+within 0–1 are normalized and other values are treated as image pixels. There is no manual scale
+selector. **Show boxes** toggles the overlay.
+For tasks with multiple images, boxes use an explicit `image_index` (zero based), `image_number`
+(one based), or image path. Choose the source image for boxes that lack an image reference.
+
 ## Later-phase materials
 
 - [`operator_guide.md`](operator_guide.md) describes the operator and review workflow.
