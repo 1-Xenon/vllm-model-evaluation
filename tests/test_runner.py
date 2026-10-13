@@ -1,5 +1,8 @@
 import base64
+import io
 import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 from vllm_evaluation.fake_runner import FakeRunner, FakeScenario
 from vllm_evaluation.models import AttemptStatus
@@ -51,6 +54,55 @@ class FakeRunnerTests(unittest.TestCase):
 
 
 class OpenAICompatibleRunnerTests(unittest.TestCase):
+    def test_http_errors_preserve_diagnostics_and_retry_policy(self) -> None:
+        cases = [
+            (400, b'{"error":{"message":"Cannot decode image"}}', "Cannot decode image"),
+            (400, b'{"message":"Unknown model"}', "Unknown model"),
+            (400, b'{"error":"Invalid settings"}', "Invalid settings"),
+            (429, b"Too many requests", "Too many requests"),
+            (500, b"", ""),
+            (502, b"Bad gateway \xff", "Bad gateway \ufffd"),
+        ]
+        runner = OpenAICompatibleRunner(
+            OpenAICompatibleConfig(endpoint_url="http://localhost/v1", model_name="model")
+        )
+        for code, body, detail in cases:
+            with self.subTest(code=code, body=body):
+                error = HTTPError(runner.chat_completions_url, code, "error", {}, io.BytesIO(body))
+                with patch("vllm_evaluation.openai_runner.urlopen", side_effect=error):
+                    result = runner.generate(request())
+                prefix = f"endpoint returned HTTP {code}"
+                self.assertEqual(result.status, AttemptStatus.FAILED)
+                self.assertEqual(result.error_code, f"http_{code}")
+                self.assertEqual(result.error_message, f"{prefix}: {detail}" if detail else prefix)
+                self.assertEqual(result.retryable, code == 429 or code >= 500)
+                self.assertIsNotNone(result.total_latency_seconds)
+                self.assertEqual(result.raw_response is not None, bool(body))
+                self.assertTrue(error.closed)
+                if code == 400 and b"Cannot decode" in body:
+                    self.assertEqual(
+                        result.raw_response, {"error": {"message": "Cannot decode image"}}
+                    )
+
+    def test_http_error_body_is_bounded_and_read_failure_preserves_status(self) -> None:
+        runner = OpenAICompatibleRunner(
+            OpenAICompatibleConfig(endpoint_url="http://localhost/v1", model_name="model")
+        )
+        for fails in (False, True):
+            with self.subTest(read_fails=fails):
+                body = io.BytesIO(b"x" * 20_000)
+                error = HTTPError(runner.chat_completions_url, 400, "error", {}, body)
+                with (
+                    patch("vllm_evaluation.openai_runner.urlopen", side_effect=error),
+                    patch.object(
+                        error, "read", side_effect=OSError("read failed") if fails else body.read
+                    ) as read,
+                ):
+                    result = runner.generate(request())
+                read.assert_called_once_with(16_384)
+                self.assertEqual(result.error_code, "http_400")
+                self.assertEqual(result.raw_response, None if fails else {"body": "x" * 16_384})
+
     def test_payload_uses_data_url_and_excludes_authentication(self) -> None:
         payload = build_chat_payload(request(), default_stream=True)
         image_url = payload["messages"][0]["content"][1]["image_url"]["url"]

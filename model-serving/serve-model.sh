@@ -8,6 +8,17 @@ if [[ -f "${ENV_FILE}" ]]; then
   source "${ENV_FILE}"
 fi
 
+# Command-line overrides are applied after models.env for automated sequential runs.
+DETACHED=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model) VLLM_MODEL="${2:?--model requires a model ID}"; shift 2 ;;
+    --port) VLLM_PORT="${2:?--port requires a port}"; shift 2 ;;
+    --detach) DETACHED=true; shift ;;
+    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
 : "${VLLM_MODEL:?Set VLLM_MODEL to a local Hugging Face model ID}"
 VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:latest}"
 VLLM_PORT="${VLLM_PORT:-8001}"
@@ -18,8 +29,14 @@ VLLM_MODEL_CACHE="${VLLM_MODEL_CACHE:-${PROJECT_ROOT}/data/huggingface}"
 VLLM_CONTAINER_NAME="${VLLM_CONTAINER_NAME:-qwen-vl-evaluation}"
 
 mkdir -p "${VLLM_MODEL_CACHE}"
+docker info >/dev/null
 docker rm -f "${VLLM_CONTAINER_NAME}" >/dev/null 2>&1 || true
+RUN_OPTIONS=()
+if [[ "${DETACHED}" == true ]]; then
+  RUN_OPTIONS+=(--detach)
+fi
 exec docker run --name "${VLLM_CONTAINER_NAME}" \
+  "${RUN_OPTIONS[@]}" \
   --gpus all \
   --ipc=host \
   --shm-size=8g \

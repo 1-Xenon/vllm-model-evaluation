@@ -76,25 +76,24 @@ Shell variables are not shared between terminals. Repeat the export block in eac
 
 ### Prepare the live image bundle
 
-The repository example contains SVG. Most vLLM image processors expect PNG, JPEG, or WebP, so convert the fixture before the live test:
+The repository example includes a PNG ready for the model endpoint. Copy the example bundle before the live test:
 
 ~~~bash
-command -v ffmpeg
 mkdir -p "$BUNDLE_ROOT/media"
 
-ffmpeg -loglevel error -y \
-  -i "$PROJECT_ROOT/examples/evaluation-bundle/media/example.svg" \
+cp "$PROJECT_ROOT/examples/evaluation-bundle/media/example.png" \
   "$BUNDLE_ROOT/media/example.png"
 
-sed 's#media/example.svg#media/example.png#g' \
-  "$PROJECT_ROOT/examples/evaluation-bundle/manifest.jsonl" \
-  > "$BUNDLE_ROOT/manifest.jsonl"
+cp "$PROJECT_ROOT/examples/evaluation-bundle/manifest.jsonl" \
+  "$BUNDLE_ROOT/manifest.jsonl"
 
 test -f "$BUNDLE_ROOT/manifest.jsonl"
 test -f "$BUNDLE_ROOT/media/example.png"
 ~~~
 
-If ffmpeg is unavailable, provide a bundle containing PNG, JPEG, or WebP images and set BUNDLE_ROOT to its absolute path.
+If you previously imported the SVG example, import the updated bundle and create a new run
+using the new snapshot. Retrying the old run keeps its original SVG input. The SVG remains
+in the repository as the illustration source; both example image tasks use the PNG.
 
 ### Start model A
 

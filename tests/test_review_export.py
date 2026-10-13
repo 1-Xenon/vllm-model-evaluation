@@ -10,7 +10,7 @@ from vllm_evaluation.execution import ExecutionConfig, execute_run
 from vllm_evaluation.export import comparison_summary, export_csv, export_jsonl
 from vllm_evaluation.fake_runner import FakeRunner
 from vllm_evaluation.importer import import_task_bundle
-from vllm_evaluation.models import GenerationAttempt
+from vllm_evaluation.models import ComparisonSession, GenerationAttempt
 from vllm_evaluation.repositories import RunRepository
 from vllm_evaluation.review import (
     create_comparison,
@@ -29,6 +29,74 @@ class ReviewAndExportTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.engine.dispose()
+
+    def test_comparison_rejects_stale_selections_without_creating_empty_drafts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "manifest.jsonl"
+            manifest.write_text(
+                '{"task_id":"task-001","category":"text","prompt":"Summarise.",'
+                '"inputs":[{"type":"text","text":"Text"}]}\n'
+                '{"task_id":"task-002","category":"text","prompt":"Describe.",'
+                '"inputs":[{"type":"text","text":"Text"}]}\n'
+            )
+            with session_scope(self.factory) as session:
+                snapshot = import_task_bundle(session, bundle_root=root)
+                repo = RunRepository()
+                model = repo.create_model_config(
+                    session,
+                    display_name="Model",
+                    endpoint_url="http://model.invalid",
+                    served_model_name="model",
+                )
+                runs = [
+                    repo.create_run(session, snapshot=snapshot, model_config=model)
+                    for _ in range(2)
+                ]
+                selections = []
+                for run in runs:
+                    execute_run(session, run, FakeRunner(), config=ExecutionConfig())
+                    selections.append(
+                        list(
+                            session.scalars(
+                                select(GenerationAttempt)
+                                .where(GenerationAttempt.run_id == run.id)
+                                .order_by(GenerationAttempt.task_id)
+                            )
+                        )
+                    )
+                a, b = selections
+                manifest.write_text(manifest.read_text().replace("Summarise.", "Other prompt."))
+                other_snapshot = import_task_bundle(session, bundle_root=root)
+                cases = [
+                    (other_snapshot.id, [a[0].id], [b[0].id], "different snapshot"),
+                    (snapshot.id, [], [b[0].id], "both model runs"),
+                    (snapshot.id, ["missing-id"], [b[0].id], "no longer exist"),
+                    (snapshot.id, [a[0].id], [a[0].id], "different attempts"),
+                    (snapshot.id, [a[0].id], [b[1].id], "no complete successful task pairs"),
+                    (snapshot.id, [a[0].id, b[0].id], [b[1].id], "one attempt per task"),
+                ]
+                for snapshot_id, a_ids, b_ids, message in cases:
+                    with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                        create_comparison(
+                            session,
+                            snapshot_id=snapshot_id,
+                            name="invalid",
+                            assignment_seed="1",
+                            model_a_attempt_ids=a_ids,
+                            model_b_attempt_ids=b_ids,
+                        )
+                    self.assertEqual(list(session.scalars(select(ComparisonSession))), [])
+                result = create_comparison(
+                    session,
+                    snapshot_id=snapshot.id,
+                    name="partial",
+                    assignment_seed="1",
+                    model_a_attempt_ids=[a[0].id, a[1].id],
+                    model_b_attempt_ids=[b[0].id],
+                )
+                self.assertEqual(len(result.session.items), 1)
+                self.assertEqual([issue.code for issue in result.issues], ["missing_pair"])
 
     def test_blind_assignments_are_stable_and_judgment_history_is_versioned(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -29,3 +29,21 @@ export VLLM_EVAL_RUNNER_MODEL_NAME=Qwen/Qwen2.5-VL-3B-Instruct-AWQ
 ```
 
 Change only `VLLM_EVAL_RUNNER_MODEL_NAME` between sequential runs, and record the checkpoint identity in each model configuration. Do not run both containers on the same GPU unless the serving configuration has been deliberately changed and tested.
+
+## Automatic model switching
+
+The operator dashboard's **Automated evaluation** section can control this launcher and wait for
+each model to become ready. It runs the selected bundle on one model before swapping to the next,
+then creates and freezes all pairwise comparisons. The application must run on the Docker host
+with access to Docker and this script.
+
+The launcher also accepts explicit overrides after loading `models.env`:
+
+```bash
+./model-serving/serve-model.sh --model Qwen/Qwen2.5-VL-7B-Instruct-AWQ --port 8001 --detach
+```
+
+Without those arguments, the existing foreground workflow is unchanged. Both modes replace only
+the container named by `VLLM_CONTAINER_NAME` (default `qwen-vl-evaluation`). Automated model and port
+overrides do not rewrite `models.env`. Inspect startup problems with
+`docker logs qwen-vl-evaluation` (or your configured container name).

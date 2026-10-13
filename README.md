@@ -53,6 +53,45 @@ uvicorn vllm_evaluation.app:create_app --factory --host 127.0.0.1 --port 8000
 
 Open `/` for the operator dashboard, `/docs` for the operator API, and `/review` for the blind-review page. Operators can import snapshots, add model configurations, create and execute runs, build comparisons, create assignments, inspect submitted judgments, view summaries, and create JSONL/CSV exports. Reviewers can load an assignment, inspect text and image inputs, submit left/right/tie judgments, assess answer acceptability, record error tags and comments, and revisit an assignment. The application can run against the deterministic fake runner before a live endpoint is configured.
 
+Runs use the live runner by default and call the endpoint and served model saved in the selected
+model configuration. For simulated workflow testing, explicitly set `VLLM_EVAL_RUNNER_TYPE=fake`.
+The dashboard displays the active runner mode. After switching from fake to live mode, restart the
+app and create a new run: executing a completed run again preserves its existing answers.
+
+## Automated evaluation
+
+The **Automated evaluation** section runs the full workflow while retaining the manual controls:
+
+1. Add model configurations with their exact served model IDs and endpoint URLs.
+2. Select one task bundle and at least two models, and name the batch.
+3. Leave **Automatically swap the local GPU model** checked for sequential local vLLM serving.
+   All selected models must use the same local endpoint port, such as
+   `http://127.0.0.1:8001/v1/chat/completions`. The app host must have Docker access and the
+   existing NVIDIA/container setup from `model-serving/README.md`.
+4. Click **Start automation**. The app imports the bundle, creates fresh runs, runs it
+   on the first model, swaps models, and repeats. It waits for `/v1/models` to identify the expected
+   model before sending tasks. Every model pair gets one frozen comparison for the selected bundle.
+
+Model order follows the model list. Startup settings and the model cache come from
+`model-serving/models.env`; the selected model and endpoint port override that file for each launch.
+The serving script defaults to `./model-serving/serve-model.sh`; override it with
+`[automation] serve_script` in a loaded TOML configuration or `VLLM_EVAL_AUTOMATION_SERVE_SCRIPT`.
+Automatic swapping is intended for the app running on the Docker host. For independently hosted
+model endpoints (including the containerized evaluation app), uncheck automatic swapping; those
+endpoints must already serve their respective models.
+
+Jobs run in the background and their configuration and results persist in the database. The page
+shows live progress, history, errors, and buttons to open frozen comparisons for review. Closing the
+page does not stop a job. **Stop automation** stops after the current request or startup command;
+completed answers remain saved and the last loaded model stays running. Manual execution and other
+automation jobs are blocked while a job owns the model server.
+
+Automation uses live inference and sequential tasks. Any failed or truncated task stops the job;
+it does not freeze partial comparisons. Inspect the saved run with the existing attempt controls
+before starting a fresh job. Keep the app running: an app restart marks unfinished jobs interrupted,
+preserving completed results rather than automatically repeating model swaps. The new
+`automation_jobs` table is created on app startup, or by `alembic upgrade head` for migrated databases.
+
 ## Later-phase materials
 
 - [`operator_guide.md`](operator_guide.md) describes the operator and review workflow.

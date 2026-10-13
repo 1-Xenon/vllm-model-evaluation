@@ -10,7 +10,7 @@ class LoadSettingsTests(unittest.TestCase):
     def test_defaults_are_available_without_a_config_file(self) -> None:
         settings = load_settings(environ={})
 
-        self.assertEqual(settings.runner_type, "fake")
+        self.assertEqual(settings.runner_type, "openai_compatible")
         self.assertEqual(settings.runner_concurrency, 1)
         self.assertEqual(settings.port, 8000)
 
@@ -33,6 +33,10 @@ streaming = false
         self.assertEqual(settings.port, 8123)
         self.assertEqual(settings.runner_timeout_seconds, 45.5)
         self.assertFalse(settings.runner_streaming)
+
+    def test_fake_runner_requires_explicit_configuration(self) -> None:
+        settings = load_settings(environ={"VLLM_EVAL_RUNNER_TYPE": "fake"})
+        self.assertEqual(settings.runner_type, "fake")
 
     def test_environment_overrides_toml(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

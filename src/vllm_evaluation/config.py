@@ -25,7 +25,7 @@ class Settings:
     task_bundle_root: Path = Path("./data/task-bundles")
     results_root: Path = Path("./data/results")
     exports_root: Path = Path("./data/exports")
-    runner_type: str = "fake"
+    runner_type: str = "openai_compatible"
     runner_endpoint_url: str = ""
     runner_model_name: str = ""
     runner_auth_token_env: str = ""
@@ -35,9 +35,11 @@ class Settings:
     runner_concurrency: int = 1
     runner_warmup_count: int = 0
     runner_streaming: bool = True
+    automation_serve_script: Path = Path("./model-serving/serve-model.sh")
 
 
 _CONFIG_KEYS: dict[tuple[str, str], tuple[str, type]] = {
+    ("automation", "serve_script"): ("automation_serve_script", Path),
     ("app", "name"): ("app_name", str),
     ("app", "environment"): ("environment", str),
     ("server", "host"): ("host", str),
@@ -61,6 +63,7 @@ _CONFIG_KEYS: dict[tuple[str, str], tuple[str, type]] = {
 }
 
 _ENV_KEYS: dict[str, tuple[str, type]] = {
+    "VLLM_EVAL_AUTOMATION_SERVE_SCRIPT": ("automation_serve_script", Path),
     "VLLM_EVAL_APP_NAME": ("app_name", str),
     "VLLM_EVAL_ENVIRONMENT": ("environment", str),
     "VLLM_EVAL_HOST": ("host", str),
