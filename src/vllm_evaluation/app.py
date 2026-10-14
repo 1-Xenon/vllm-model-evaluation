@@ -714,6 +714,13 @@ th { background: #eee; }
 </section>
 
 <section>
+<h2>Current comparisons</h2>
+<p class='hint'>All comparison records currently stored in the evaluation database.</p>
+<button id='refresh-comparisons' type='button'>Refresh comparisons</button>
+<div id='comparisons-list'></div>
+</section>
+
+<section>
 <h2>Reviewer assignments</h2>
 <p class='hint'>Freeze the comparison first, then choose it below. The button creates missing
   assignments or loads the existing assignments for that reviewer.</p>
@@ -742,7 +749,7 @@ th { background: #eee; }
   <label>Format<select id='export-format'><option value='jsonl'>JSONL</option>
     <option value='csv'>CSV</option></select></label>
   <label>Path visible to the application
-    <input id='export-path' required value='/data/exports/comparison.jsonl'></label>
+    <input id='export-path' required value='data/exports/comparison.jsonl'></label>
   <label><input id='include-mapping' type='checkbox'> Include model mapping in JSONL export</label>
   <button type='submit'>Create export</button>
 </form>
@@ -793,6 +800,35 @@ function selectBundleManifest() {
   $('manifest-path').value = bundle ? bundle.manifest_path : '';
 }
 
+function renderComparisons(records) {
+  const root = $('comparisons-list'); root.replaceChildren();
+  if (!records.length) { root.textContent = 'No comparisons found.'; return; }
+  const table = document.createElement('table');
+  const head = document.createElement('tr');
+  ['Comparison ID', 'Name', 'Status', 'Items', 'Created'].forEach((heading) => {
+    const cell = document.createElement('th'); cell.textContent = heading; head.append(cell);
+  });
+  table.append(head);
+  records.forEach((record) => {
+    const row = document.createElement('tr');
+    const idCell = document.createElement('td');
+    const idInput = document.createElement('input');
+    idInput.value = record.id; idInput.readOnly = true; idInput.size = 36;
+    const copy = document.createElement('button');
+    copy.type = 'button'; copy.textContent = 'Copy';
+    copy.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(record.id);
+      showStatus('Comparison ID copied.');
+    });
+    idCell.append(idInput, copy); row.append(idCell);
+    [record.name, record.status, record.item_count, record.created_at].forEach((value) => {
+      const cell = document.createElement('td'); cell.textContent = String(value ?? ''); row.append(cell);
+    });
+    table.append(row);
+  });
+  root.append(table);
+}
+
 async function refreshRecords() {
   const health = await request('/health');
   $('runner-mode').textContent = health.runner_type === 'fake'
@@ -802,6 +838,7 @@ async function refreshRecords() {
   state.configs = await request('/api/model-configs');
   state.runs = await request('/api/runs');
   state.comparisons = await request('/api/comparisons');
+  renderComparisons(state.comparisons);
   state.assignments = await request('/api/assignments');
   state.bundles = await request('/api/task-bundles');
   setOptions('bundle-root', state.bundles, (record) => record.name);
@@ -987,7 +1024,7 @@ $('comparison-form').addEventListener('submit', async (event) => {
     $('assignment-comparison').value = result.comparison_id;
     $('judgment-comparison').value = result.comparison_id;
     $('export-comparison').value = result.comparison_id;
-    $('export-path').value = '/data/exports/comparison-' + result.comparison_id + '.jsonl';
+    $('export-path').value = 'data/exports/comparison-' + result.comparison_id + '.jsonl';
     showJson('comparison-output', result);
     showStatus(result.issues.length
       ? 'Comparison created with excluded tasks. Review the issues before freezing.'
@@ -1056,9 +1093,13 @@ $('load-summary').addEventListener('click', async () => {
   } catch (error) { showStatus(error.message); }
 });
 
+$('refresh-comparisons').addEventListener('click', () =>
+  refreshRecords().then(() => showStatus('Comparisons refreshed.'))
+    .catch((error) => showStatus(error.message)));
+
 $('export-format').addEventListener('change', () => {
   const path = $('export-path').value;
-  if (path.startsWith('/data/exports/comparison-')) {
+  if (path.startsWith('data/exports/comparison-')) {
     $('export-path').value = path.replace(/\\.(jsonl|csv)$/, '') +
       '.' + $('export-format').value;
   }
