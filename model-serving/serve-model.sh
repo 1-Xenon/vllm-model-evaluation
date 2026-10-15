@@ -42,6 +42,9 @@ exec docker run --name "${VLLM_CONTAINER_NAME}" \
   --shm-size=8g \
   -p "${VLLM_PORT}:8000" \
   -v "${VLLM_MODEL_CACHE}:/root/.cache/huggingface" \
+  -e HF_HUB_OFFLINE=1 \
+  -e TRANSFORMERS_OFFLINE=1 \
+  -e HF_HUB_DISABLE_TELEMETRY=1 \
   "${VLLM_IMAGE}" \
   "${VLLM_MODEL}" \
   --dtype half \
