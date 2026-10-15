@@ -134,16 +134,28 @@ class ReviewAndExportTests(unittest.TestCase):
                     FakeRunner(answer='{"type":"equipment","bbox_2d":"[10,20,30,40]"}'),
                     config=ExecutionConfig(),
                 )
-                attempts = list(
-                    session.scalars(select(GenerationAttempt).order_by(GenerationAttempt.run_id))
+                unrelated_run = repo.create_run(session, snapshot=snapshot, model_config=model_a)
+                execute_run(
+                    session,
+                    unrelated_run,
+                    FakeRunner(answer="unrelated run output"),
+                    config=ExecutionConfig(),
                 )
+                attempt_a = session.scalar(
+                    select(GenerationAttempt).where(GenerationAttempt.run_id == run_a.id)
+                )
+                attempt_b = session.scalar(
+                    select(GenerationAttempt).where(GenerationAttempt.run_id == run_b.id)
+                )
+                self.assertIsNotNone(attempt_a)
+                self.assertIsNotNone(attempt_b)
                 comparison = create_comparison(
                     session,
                     snapshot_id=snapshot.id,
                     name="smoke",
                     assignment_seed="fixed-seed",
-                    model_a_attempt_ids=[attempts[0].id],
-                    model_b_attempt_ids=[attempts[1].id],
+                    model_a_attempt_ids=[attempt_a.id],
+                    model_b_attempt_ids=[attempt_b.id],
                 ).session
                 freeze_comparison(session, comparison.id)
                 first = ensure_reviewer_assignments(session, comparison.id, "reviewer-1")[0]
@@ -177,5 +189,9 @@ class ReviewAndExportTests(unittest.TestCase):
                     session, root / "export.jsonl", comparison_id=comparison.id
                 )
                 csv_path = export_csv(session, root / "export.csv", comparison_id=comparison.id)
-                self.assertIn('"record_type": "judgment"', jsonl_path.read_text())
-                self.assertIn("record_type", csv_path.read_text())
+                jsonl = jsonl_path.read_text()
+                csv = csv_path.read_text()
+                self.assertIn('"record_type": "judgment"', jsonl)
+                self.assertIn("record_type", csv)
+                self.assertNotIn("unrelated run output", jsonl)
+                self.assertNotIn("unrelated run output", csv)

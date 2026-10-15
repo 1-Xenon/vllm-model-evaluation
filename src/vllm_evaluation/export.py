@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from .models import (
@@ -41,6 +41,26 @@ def _attempt_record(attempt: GenerationAttempt) -> dict[str, Any]:
     }
 
 
+def _comparison_attempts(session: Session, comparison_id: str | None):
+    query = select(GenerationAttempt).options(
+        joinedload(GenerationAttempt.task),
+        joinedload(GenerationAttempt.run).joinedload(ModelRun.model_config),
+    )
+    if comparison_id:
+        query = (
+            query.join(
+                ComparisonItem,
+                or_(
+                    GenerationAttempt.id == ComparisonItem.left_attempt_id,
+                    GenerationAttempt.id == ComparisonItem.right_attempt_id,
+                ),
+            )
+            .where(ComparisonItem.comparison_session_id == comparison_id)
+            .distinct()
+        )
+    return session.scalars(query.order_by(GenerationAttempt.created_at))
+
+
 def export_jsonl(
     session: Session,
     path: str | Path,
@@ -49,14 +69,7 @@ def export_jsonl(
     include_model_mapping: bool = True,
 ) -> Path:
     path = Path(path)
-    attempts = session.scalars(
-        select(GenerationAttempt)
-        .options(
-            joinedload(GenerationAttempt.task),
-            joinedload(GenerationAttempt.run).joinedload(ModelRun.model_config),
-        )
-        .order_by(GenerationAttempt.created_at)
-    )
+    attempts = _comparison_attempts(session, comparison_id)
     records: list[dict[str, Any]] = []
     for attempt in attempts:
         record = _attempt_record(attempt)
@@ -109,14 +122,7 @@ def export_jsonl(
 def export_csv(session: Session, path: str | Path, *, comparison_id: str | None = None) -> Path:
     path = Path(path)
     rows: list[dict[str, Any]] = []
-    attempts = session.scalars(
-        select(GenerationAttempt)
-        .options(
-            joinedload(GenerationAttempt.task),
-            joinedload(GenerationAttempt.run).joinedload(ModelRun.model_config),
-        )
-        .order_by(GenerationAttempt.created_at)
-    )
+    attempts = _comparison_attempts(session, comparison_id)
     for attempt in attempts:
         rows.append(
             {
