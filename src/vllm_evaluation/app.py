@@ -452,9 +452,9 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
             return [_serialize_judgment(judgment) for judgment in rows]
 
     @app.get("/api/review/assignments")
-    def review_assignments_list() -> list[dict[str, Any]]:
+    def review_assignments_list(comparison_id: str | None = None) -> list[dict[str, Any]]:
         with session_scope(factory) as session:
-            assignments = session.scalars(
+            query = (
                 select(ReviewerAssignment)
                 .options(
                     joinedload(ReviewerAssignment.comparison_item).joinedload(ComparisonItem.task)
@@ -465,7 +465,14 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
                     )
                 )
                 .order_by(ReviewerAssignment.assigned_at, ReviewerAssignment.id)
-            ).all()
+            )
+            if comparison_id:
+                query = query.where(
+                    ReviewerAssignment.comparison_item.has(
+                        ComparisonItem.comparison_session_id == comparison_id
+                    )
+                )
+            assignments = session.scalars(query).all()
             return [
                 {
                     "assignment_id": assignment.id,
@@ -822,7 +829,8 @@ function renderComparisons(records) {
     });
     idCell.append(idInput, copy); row.append(idCell);
     [record.name, record.status, record.item_count, record.created_at].forEach((value) => {
-      const cell = document.createElement('td'); cell.textContent = String(value ?? ''); row.append(cell);
+      const cell = document.createElement('td');
+      cell.textContent = String(value ?? ''); row.append(cell);
     });
     table.append(row);
   });
@@ -1297,10 +1305,14 @@ legend { font-weight: 600; padding: 0 .35rem; }
 </head>
 <body>
 <h1>Blind Review</h1>
-<p>Load an assignment to inspect the anonymous task and submit your judgment.</p>
+<p>Select a frozen comparison, then load one of its assignments to inspect the anonymous task
+  and submit your judgment.</p>
 <div class='assignment-bar'>
+  <label for='comparison'>Frozen comparison
+    <select id='comparison' required></select>
+  </label>
   <label for='assignment'>Assignment ID
-    <select id='assignment' required></select>
+    <select id='assignment' required disabled></select>
   </label>
   <button id='load' type='button'>Load assignment</button>
 </div>
@@ -1382,6 +1394,7 @@ legend { font-weight: 600; padding: 0 .35rem; }
 </main>
 <script>
 let currentAssignmentId = null;
+let comparisons = [];
 
 const message = document.getElementById('message');
 const review = document.getElementById('review');
@@ -1573,9 +1586,54 @@ function renderReview(data) {
     : 'Review loaded. Model identities are hidden.', 'success');
 }
 
-async function loadAssignmentOptions() {
+function setAssignmentPlaceholder(text, disabled = true) {
+  const select = document.getElementById('assignment');
+  select.replaceChildren();
+  const option = document.createElement('option');
+  option.textContent = text;
+  option.disabled = true;
+  option.selected = true;
+  select.append(option);
+  select.disabled = disabled;
+}
+
+async function loadComparisonOptions() {
   try {
-    const response = await fetch('/api/review/assignments');
+    const response = await fetch('/api/comparisons');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Unable to load comparisons.');
+    comparisons = data.filter((comparison) =>
+      comparison.status === 'frozen' || comparison.status === 'open');
+    const select = document.getElementById('comparison');
+    select.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.textContent = 'Select a frozen comparison';
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    select.append(placeholder);
+    comparisons.forEach((comparison) => {
+      const option = document.createElement('option');
+      option.value = comparison.id;
+      option.textContent = comparison.name + ' — ' + comparison.item_count + ' tasks — '
+        + comparison.status;
+      select.append(option);
+    });
+    if (!comparisons.length) select.options[0].textContent = 'No frozen comparisons available';
+    setAssignmentPlaceholder('Select a comparison first');
+  } catch (error) {
+    showMessage(error.message, 'error');
+  }
+}
+
+async function loadAssignmentOptions() {
+  const comparisonId = document.getElementById('comparison').value;
+  if (!comparisonId) {
+    setAssignmentPlaceholder('Select a comparison first');
+    return;
+  }
+  try {
+    const response = await fetch('/api/review/assignments?comparison_id='
+      + encodeURIComponent(comparisonId));
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || 'Unable to load assignments.');
     const select = document.getElementById('assignment');
@@ -1588,11 +1646,9 @@ async function loadAssignmentOptions() {
       select.append(option);
     });
     if (!data.length) {
-      const option = document.createElement('option');
-      option.textContent = 'No assignments available';
-      option.disabled = true;
-      option.selected = true;
-      select.append(option);
+      setAssignmentPlaceholder('No assignments available for this comparison');
+    } else {
+      select.disabled = false;
     }
   } catch (error) {
     showMessage(error.message, 'error');
@@ -1652,7 +1708,10 @@ async function submitJudgment(event) {
 }
 
 document.getElementById('load').addEventListener('click', loadReview);
-loadAssignmentOptions();
+document.getElementById('comparison').addEventListener('change', () => {
+  loadAssignmentOptions();
+});
+loadComparisonOptions();
 document.querySelectorAll('[name="disposition"]').forEach((element) => {
   element.addEventListener('change', () => setRequiredFields(element.value === 'complete'));
 });

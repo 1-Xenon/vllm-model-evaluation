@@ -27,6 +27,8 @@ The application does not automatically swap model servers. This is deliberate: t
 - Only paired successful attempts are added to the frozen review set.
 - Reviewer left/right placement is deterministic for the comparison seed, reviewer ID, and task ID.
 - Model names, endpoint URLs, timing, and run metadata are omitted from the reviewer payload.
+- On `/review`, select a frozen or open comparison first; the assignment list is then filtered to
+  assignments belonging to that comparison.
 - Judgment submissions create a new version rather than overwriting history.
 
 ## Export
