@@ -18,6 +18,7 @@ from .models import (
     ComparisonSession,
     ComparisonStatus,
     GenerationAttempt,
+    ModelRun,
     ReviewerAssignment,
     ReviewerJudgment,
     Task,
@@ -191,12 +192,14 @@ def reviewer_view(session: Session, assignment_id: str) -> dict[str, Any]:
             .joinedload(Task.inputs),
             joinedload(ReviewerAssignment.left_attempt),
             joinedload(ReviewerAssignment.right_attempt),
+            joinedload(ReviewerAssignment.judgments),
         )
         .where(ReviewerAssignment.id == assignment_id)
     )
     if assignment is None:
         raise ValidationError(f"review assignment not found: {assignment_id}")
     item = assignment.comparison_item
+    latest = assignment.judgments[-1] if assignment.judgments else None
     inputs = []
     for task_input in sorted(item.task.inputs, key=lambda value: value.ordinal):
         if task_input.input_type == "text":
@@ -209,10 +212,23 @@ def reviewer_view(session: Session, assignment_id: str) -> dict[str, Any]:
                     "media_type": task_input.media_asset.media_type,
                 }
             )
-    return {
+    result = {
         "assignment_id": assignment.id,
         "reviewer_id": assignment.reviewer_id,
         "status": assignment.status,
+        "latest_judgment": (
+            {
+                "version": latest.version,
+                "overall_preference": latest.overall_preference,
+                "left_acceptability": latest.left_acceptability,
+                "right_acceptability": latest.right_acceptability,
+                "disposition": latest.disposition,
+                "error_tags": latest.error_tags_json or [],
+                "comments": latest.comments,
+            }
+            if latest
+            else None
+        ),
         "snapshot_id": item.comparison_session.snapshot_id,
         "task": {
             "task_id": item.task.stable_task_id,
@@ -233,6 +249,44 @@ def reviewer_view(session: Session, assignment_id: str) -> dict[str, Any]:
             "status": assignment.right_attempt.status,
         },
     }
+    session.expire(assignment, ["judgments"])
+    return result
+
+
+def comparison_results(session: Session, comparison_id: str) -> list[dict[str, Any]]:
+    """Return task-level review results with model identities for operators."""
+    assignments = list(
+        session.scalars(
+            select(ReviewerAssignment)
+            .join(ComparisonItem)
+            .join(Task, ComparisonItem.task_id == Task.id)
+            .where(ComparisonItem.comparison_session_id == comparison_id)
+            .options(
+                joinedload(ReviewerAssignment.left_attempt)
+                .joinedload(GenerationAttempt.run)
+                .joinedload(ModelRun.model_config),
+                joinedload(ReviewerAssignment.right_attempt)
+                .joinedload(GenerationAttempt.run)
+                .joinedload(ModelRun.model_config),
+            )
+            .order_by(Task.task_order, ReviewerAssignment.id)
+        )
+    )
+    results = []
+    for assignment in assignments:
+        left_model = assignment.left_attempt.run.model_config
+        right_model = assignment.right_attempt.run.model_config
+        result = reviewer_view(session, assignment.id)
+        result["left"]["model"] = {
+            "display_name": left_model.display_name,
+            "served_model_name": left_model.served_model_name,
+        }
+        result["right"]["model"] = {
+            "display_name": right_model.display_name,
+            "served_model_name": right_model.served_model_name,
+        }
+        results.append(result)
+    return results
 
 
 def submit_judgment(

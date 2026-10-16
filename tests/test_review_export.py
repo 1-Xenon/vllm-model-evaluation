@@ -182,8 +182,14 @@ class ReviewAndExportTests(unittest.TestCase):
                     first.id,
                     {"overall_preference": "tie", "comments": "revisited"},
                 )
+                revised_view = reviewer_view(session, first.id)
+                self.assertEqual(revised_view["latest_judgment"]["version"], 2)
+                self.assertEqual(revised_view["latest_judgment"]["overall_preference"], "tie")
                 summary = comparison_summary(session, comparison.id)
                 self.assertEqual(summary["judgment_count"], 1)
+                self.assertEqual(summary["completed_count"], 1)
+                self.assertEqual(summary["pending_count"], 0)
+                self.assertEqual(summary["models"]["left"]["display_name"], "Model A")
                 self.assertTrue(summary["counts_are_reviewer_votes"])
                 jsonl_path = export_jsonl(
                     session, root / "export.jsonl", comparison_id=comparison.id

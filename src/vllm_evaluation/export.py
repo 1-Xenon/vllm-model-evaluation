@@ -189,6 +189,19 @@ def export_csv(session: Session, path: str | Path, *, comparison_id: str | None 
 
 
 def comparison_summary(session: Session, comparison_id: str) -> dict[str, Any]:
+    session.expire_all()
+    comparison_item = session.scalar(
+        select(ComparisonItem)
+        .where(ComparisonItem.comparison_session_id == comparison_id)
+        .options(
+            joinedload(ComparisonItem.left_attempt)
+            .joinedload(GenerationAttempt.run)
+            .joinedload(ModelRun.model_config),
+            joinedload(ComparisonItem.right_attempt)
+            .joinedload(GenerationAttempt.run)
+            .joinedload(ModelRun.model_config),
+        )
+    )
     assignments = list(
         session.scalars(
             select(ReviewerAssignment)
@@ -197,6 +210,7 @@ def comparison_summary(session: Session, comparison_id: str) -> dict[str, Any]:
             .options(joinedload(ReviewerAssignment.judgments))
         ).unique()
     )
+    status_counts = Counter(assignment.status for assignment in assignments)
     preferences = Counter()
     acceptability = Counter()
     errors = Counter()
@@ -208,12 +222,38 @@ def comparison_summary(session: Session, comparison_id: str) -> dict[str, Any]:
         acceptability[f"left:{judgment.left_acceptability or 'missing'}"] += 1
         acceptability[f"right:{judgment.right_acceptability or 'missing'}"] += 1
         errors.update(judgment.error_tags_json or [])
+    models = None
+    if comparison_item:
+        left_model = comparison_item.left_attempt.run.model_config
+        right_model = comparison_item.right_attempt.run.model_config
+        models = {
+            "left": {
+                "display_name": left_model.display_name,
+                "served_model_name": left_model.served_model_name,
+                "checkpoint_identity": left_model.checkpoint_identity,
+                "endpoint_url": left_model.endpoint_url,
+                "generation_settings": left_model.generation_settings_json,
+                "serving_environment": left_model.serving_environment_json,
+            },
+            "right": {
+                "display_name": right_model.display_name,
+                "served_model_name": right_model.served_model_name,
+                "checkpoint_identity": right_model.checkpoint_identity,
+                "endpoint_url": right_model.endpoint_url,
+                "generation_settings": right_model.generation_settings_json,
+                "serving_environment": right_model.serving_environment_json,
+            },
+        }
     return {
         "comparison_id": comparison_id,
         "assignment_count": len(assignments),
         "judgment_count": sum(bool(a.judgments) for a in assignments),
+        "status_counts": dict(status_counts),
+        "completed_count": status_counts["submitted"] + status_counts["skipped"],
+        "pending_count": status_counts["assigned"] + status_counts["in_progress"],
         "preferences": dict(preferences),
         "acceptability": dict(acceptability),
         "error_tags": dict(errors),
         "counts_are_reviewer_votes": True,
+        "models": models,
     }

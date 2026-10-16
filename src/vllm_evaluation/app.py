@@ -19,7 +19,6 @@ from .execution import ExecutionConfig
 from .export import comparison_summary, export_csv, export_jsonl
 from .logging_config import configure_logging
 from .models import (
-    AssignmentStatus,
     ComparisonItem,
     ComparisonSession,
     GenerationAttempt,
@@ -41,7 +40,13 @@ from .operator import (
     list_snapshots,
     run_progress,
 )
-from .review import create_comparison, ensure_reviewer_assignments, reviewer_view, submit_judgment
+from .review import (
+    comparison_results,
+    create_comparison,
+    ensure_reviewer_assignments,
+    reviewer_view,
+    submit_judgment,
+)
 from .runner_factory import create_runner
 
 
@@ -161,6 +166,7 @@ def _serialize_judgment(judgment: ReviewerJudgment) -> dict[str, Any]:
         "assignment_id": judgment.assignment_id,
         "reviewer_id": judgment.assignment.reviewer_id,
         "task_id": judgment.assignment.comparison_item.task.stable_task_id,
+        "assignment_status": judgment.assignment.status,
         "version": judgment.version,
         "overall_preference": judgment.overall_preference,
         "left_acceptability": judgment.left_acceptability,
@@ -451,6 +457,19 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
             ).all()
             return [_serialize_judgment(judgment) for judgment in rows]
 
+    @app.get("/api/comparisons/{comparison_id}/results")
+    def results(comparison_id: str) -> list[dict[str, Any]]:
+        with session_scope(factory) as session:
+            records = comparison_results(session, comparison_id)
+            for record in records:
+                for task_input in record["task"]["inputs"]:
+                    if task_input["type"] == "image":
+                        task_input["url"] = (
+                            f"/api/snapshots/{record['snapshot_id']}/media/"
+                            f"{task_input['relative_path']}"
+                        )
+            return records
+
     @app.get("/api/review/assignments")
     def review_assignments_list(comparison_id: str | None = None) -> list[dict[str, Any]]:
         with session_scope(factory) as session:
@@ -458,11 +477,6 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
                 select(ReviewerAssignment)
                 .options(
                     joinedload(ReviewerAssignment.comparison_item).joinedload(ComparisonItem.task)
-                )
-                .where(
-                    ReviewerAssignment.status.in_(
-                        [AssignmentStatus.ASSIGNED.value, AssignmentStatus.IN_PROGRESS.value]
-                    )
                 )
                 .order_by(ReviewerAssignment.assigned_at, ReviewerAssignment.id)
             )
@@ -477,6 +491,7 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
                 {
                     "assignment_id": assignment.id,
                     "status": assignment.status,
+                    "reviewer_id": assignment.reviewer_id,
                     "task_id": assignment.comparison_item.task.stable_task_id,
                 }
                 for assignment in assignments
@@ -534,7 +549,11 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
     def judgment(assignment_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         with session_scope(factory) as session:
             saved = submit_judgment(session, assignment_id, payload)
-            return {"judgment_id": saved.id, "version": saved.version}
+            return {
+                "judgment_id": saved.id,
+                "version": saved.version,
+                "status": saved.assignment.status,
+            }
 
     @app.get("/api/exports/{comparison_id}/summary")
     def summary(comparison_id: str) -> dict[str, Any]:
@@ -559,6 +578,29 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
                 )
             )
         return {"path": str(output), "format": kind}
+
+    @app.get("/api/exports/{comparison_id}/download")
+    def download_export(
+        comparison_id: str,
+        format: str = "jsonl",
+        include_model_mapping: bool = False,
+    ) -> FileResponse:
+        kind = format.lower()
+        if kind not in {"jsonl", "csv"}:
+            raise HTTPException(status_code=400, detail="format must be jsonl or csv")
+        path = settings.exports_root / f"comparison-{comparison_id}.{kind}"
+        with session_scope(factory) as session:
+            if kind == "csv":
+                export_csv(session, path, comparison_id=comparison_id)
+            else:
+                export_jsonl(
+                    session,
+                    path,
+                    comparison_id=comparison_id,
+                    include_model_mapping=include_model_mapping,
+                )
+        media_type = "text/csv" if kind == "csv" else "application/x-ndjson"
+        return FileResponse(path, media_type=media_type, filename=path.name)
 
     return app
 
@@ -592,6 +634,28 @@ table { border-collapse: collapse; display: block; overflow-x: auto; width: 100%
 th, td { border: 1px solid #bbb; padding: .45rem; text-align: left; vertical-align: top; }
 th { background: #eee; }
 .status { min-height: 1.5rem; }
+.summary-cards { display: grid; gap: .75rem;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  margin: 1rem 0; }
+.summary-card { background: #f6f6f6; border: 1px solid #bbb; padding: .75rem; }
+.summary-card strong { display: block; font-size: 1.5rem; }
+.model-summary { background: #f6f6f6; border: 1px solid #bbb; padding: .75rem; }
+.model-summary .model-heading { margin: 0 0 .35rem; }
+.model-summary .model-name { font-weight: 600; margin-bottom: .5rem; }
+.hidden { display: none; }
+.results-navigation { align-items: center; display: flex; flex-wrap: wrap; gap: .5rem;
+  margin: 1rem 0; }
+.results-progress { font-weight: 600; }
+.results-review { border: 1px solid #bbb; padding: 1rem; }
+.results-inputs { background: #f6f6f6; margin: 1rem 0; padding: 1rem; }
+.results-inputs img { display: block; height: auto; max-height: 28rem; max-width: 100%; }
+.results-answers { display: grid; gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); }
+.results-answer-panel { border: 1px solid #bbb; padding: 1rem; }
+.results-answer-panel h3 { margin-top: 0; }
+.results-answer { white-space: pre-wrap; word-break: break-word; }
+.results-verdict { background: #eef6ee; border: 1px solid #9ab89a; font-weight: 600;
+  margin: 1rem 0; padding: .75rem; }
 </style>
 </head>
 <body>
@@ -744,21 +808,48 @@ th { background: #eee; }
 <label>Assignment<select id='judgment-assignment' required></select></label>
 <button id='load-judgments' type='button'>Load judgments</button>
 <label>Comparison for summary<select id='judgment-comparison' required></select></label>
-<button id='load-summary' type='button'>Load summary</button>
+<button id='load-summary' type='button'>Load results</button>
+<div id='summary-dashboard'></div>
+<div id='results-view' class='hidden'>
+  <div class='results-navigation'>
+    <button id='results-previous' type='button' disabled>Previous</button>
+    <span id='results-progress' class='results-progress'></span>
+    <button id='results-next' type='button' disabled>Next</button>
+  </div>
+  <article class='results-review'>
+    <h3 id='results-task-heading'></h3>
+    <p><strong>Category:</strong> <span id='results-category'></span></p>
+    <h4>Prompt</h4>
+    <div id='results-prompt' class='prompt'></div>
+    <div id='results-inputs' class='results-inputs'></div>
+    <div id='results-verdict' class='results-verdict'></div>
+    <div class='results-answers'>
+      <section class='results-answer-panel'>
+        <h3 id='results-left-model'></h3>
+        <div id='results-left-answer' class='results-answer'></div>
+      </section>
+      <section class='results-answer-panel'>
+        <h3 id='results-right-model'></h3>
+        <div id='results-right-answer' class='results-answer'></div>
+      </section>
+    </div>
+  </article>
+</div>
 <div id='judgments-output'></div>
-<pre id='summary-output' class='output'></pre>
+<details><summary>Raw summary data</summary>
+  <pre id='summary-output' class='output'></pre>
+</details>
 </section>
 
 <section>
 <h2>Exports</h2>
 <form id='export-form'>
-  <label>Comparison ID<input id='export-comparison' required></label>
-  <label>Format<select id='export-format'><option value='jsonl'>JSONL</option>
-    <option value='csv'>CSV</option></select></label>
-  <label>Path visible to the application
-    <input id='export-path' required value='data/exports/comparison.jsonl'></label>
-  <label><input id='include-mapping' type='checkbox'> Include model mapping in JSONL export</label>
-  <button type='submit'>Create export</button>
+  <label>Comparison<select id='export-comparison' required></select></label>
+  <label><input id='include-mapping' type='checkbox'> Include model metadata in JSONL</label>
+  <div class='button-row'>
+    <button id='download-jsonl' type='button'>Download JSONL</button>
+    <button id='download-csv' type='button'>Download CSV</button>
+  </div>
 </form>
 <pre id='export-output' class='output'></pre>
 </section>
@@ -868,6 +959,8 @@ async function refreshRecords() {
   setOptions('judgment-assignment', state.assignments,
     (record) => record.task_id + ' [' + record.status + '] ' + record.assignment_id);
   setOptions('judgment-comparison', state.comparisons,
+    (record) => record.name + ' [' + record.status + '] ' + record.id);
+  setOptions('export-comparison', state.comparisons,
     (record) => record.name + ' [' + record.status + '] ' + record.id);
   showJson('snapshots-output', state.snapshots);
   showJson('configs-output', state.configs);
@@ -1032,7 +1125,6 @@ $('comparison-form').addEventListener('submit', async (event) => {
     $('assignment-comparison').value = result.comparison_id;
     $('judgment-comparison').value = result.comparison_id;
     $('export-comparison').value = result.comparison_id;
-    $('export-path').value = 'data/exports/comparison-' + result.comparison_id + '.jsonl';
     showJson('comparison-output', result);
     showStatus(result.issues.length
       ? 'Comparison created with excluded tasks. Review the issues before freezing.'
@@ -1086,6 +1178,159 @@ function renderJudgments(records) {
   root.append(table);
 }
 
+function renderSummary(summary, judgments) {
+  const root = $('summary-dashboard'); root.replaceChildren();
+  const cards = document.createElement('div'); cards.className = 'summary-cards';
+  const values = [
+    ['Reviews', summary.assignment_count],
+    ['Completed', summary.completed_count],
+    ['Pending', summary.pending_count],
+    ['Left wins', summary.preferences?.left || 0],
+    ['Right wins', summary.preferences?.right || 0],
+    ['Ties', summary.preferences?.tie || 0],
+  ];
+  values.forEach(([label, value]) => {
+    const card = document.createElement('div'); card.className = 'summary-card';
+    const strong = document.createElement('strong'); strong.textContent = String(value ?? 0);
+    card.append(strong, document.createTextNode(label)); cards.append(card);
+  });
+  root.append(cards);
+
+  if (summary.models) {
+    const models = document.createElement('div'); models.className = 'grid';
+    ['left', 'right'].forEach((side) => {
+      const model = summary.models[side];
+      if (!model) return;
+      const panel = document.createElement('div'); panel.className = 'model-summary';
+      const heading = document.createElement('h3');
+      heading.className = 'model-heading';
+      heading.textContent = side[0].toUpperCase() + side.slice(1) + ' Model';
+      const name = document.createElement('div');
+      name.className = 'model-name';
+      name.textContent = model.display_name || model.served_model_name;
+      panel.append(heading, name);
+      const details = [
+        ['Served', model.served_model_name || 'n/a'],
+        ['Checkpoint', model.checkpoint_identity],
+        ['Generation', model.generation_settings
+          ? JSON.stringify(model.generation_settings) : null],
+      ];
+      details.forEach(([label, value]) => {
+        if (!value) return;
+        const row = document.createElement('div');
+        const labelElement = document.createElement('strong');
+        labelElement.textContent = label + ': ';
+        row.append(labelElement, document.createTextNode(value));
+        panel.append(row);
+      });
+      models.append(panel);
+    });
+    root.append(models);
+  }
+
+  const latest = new Map();
+  judgments.forEach((judgment) => {
+    const previous = latest.get(judgment.assignment_id);
+    if (!previous || judgment.version > previous.version) {
+      latest.set(judgment.assignment_id, judgment);
+    }
+  });
+  if (!latest.size) return;
+  const heading = document.createElement('h3');
+  heading.textContent = 'Latest task results'; root.append(heading);
+  const table = document.createElement('table');
+  const head = document.createElement('tr');
+  ['Task', 'Preference', 'Left', 'Right', 'Errors', 'Comments'].forEach((label) => {
+    const cell = document.createElement('th'); cell.textContent = label; head.append(cell);
+  });
+  table.append(head);
+  latest.forEach((judgment) => {
+    const row = document.createElement('tr');
+    [judgment.task_id, judgment.overall_preference, judgment.left_acceptability,
+      judgment.right_acceptability, (judgment.error_tags || []).join(', '),
+      judgment.comments || ''].forEach((value) => {
+        const cell = document.createElement('td');
+        cell.textContent = String(value ?? ''); row.append(cell);
+      });
+    table.append(row);
+  });
+  root.append(table);
+}
+
+let resultRecords = [];
+let currentResultIndex = -1;
+
+function renderResultInputs(inputs) {
+  const root = $('results-inputs'); root.replaceChildren();
+  if (!inputs.length) { root.classList.add('hidden'); return; }
+  root.classList.remove('hidden');
+  const heading = document.createElement('h4'); heading.textContent = 'Inputs';
+  root.append(heading);
+  inputs.forEach((input, index) => {
+    const item = document.createElement('div');
+    if (input.type === 'image' && input.url) {
+      const image = document.createElement('img');
+      image.src = input.url; image.alt = 'Task image ' + (index + 1); item.append(image);
+    } else if (input.type === 'text') {
+      item.textContent = input.text || '';
+    }
+    root.append(item);
+  });
+}
+
+function renderResultVerdict(judgment) {
+  const root = $('results-verdict'); root.replaceChildren();
+  if (!judgment) {
+    root.textContent = 'Verdict: Not submitted';
+    return;
+  }
+  const preference = {left: 'Left', right: 'Right', tie: 'Tie'}[judgment.overall_preference]
+    || 'Not specified';
+  const left = judgment.left_acceptability || 'Not specified';
+  const right = judgment.right_acceptability || 'Not specified';
+  [
+    ['Overall Preference', preference],
+    ['Left Acceptability', left],
+    ['Right Acceptability', right],
+  ].forEach(([label, value]) => {
+    const row = document.createElement('div');
+    const labelElement = document.createElement('strong');
+    labelElement.textContent = label + ': ';
+    row.append(labelElement, document.createTextNode(value));
+    root.append(row);
+  });
+}
+
+function renderResultAt(index) {
+  if (index < 0 || index >= resultRecords.length) return;
+  currentResultIndex = index;
+  const record = resultRecords[index];
+  const judgment = record.latest_judgment;
+  $('results-task-heading').textContent = record.task.task_id || '';
+  $('results-category').textContent = record.task.category || '';
+  $('results-prompt').textContent = record.task.prompt || '';
+  renderResultInputs(record.task.inputs || []);
+  renderResultVerdict(judgment);
+  $('results-left-model').textContent = 'Left — ' +
+    (record.left.model?.display_name || record.left.model?.served_model_name || 'Model');
+  $('results-right-model').textContent = 'Right — ' +
+    (record.right.model?.display_name || record.right.model?.served_model_name || 'Model');
+  $('results-left-answer').textContent = record.left.answer || '';
+  $('results-right-answer').textContent = record.right.answer || '';
+  $('results-progress').textContent = 'Task ' + (index + 1) + ' of ' + resultRecords.length;
+  $('results-previous').disabled = index <= 0;
+  $('results-next').disabled = index >= resultRecords.length - 1;
+}
+
+function renderResults(records) {
+  resultRecords = records || [];
+  currentResultIndex = -1;
+  const root = $('results-view');
+  if (!resultRecords.length) { root.classList.add('hidden'); return; }
+  root.classList.remove('hidden');
+  renderResultAt(0);
+}
+
 $('load-judgments').addEventListener('click', async () => {
   try {
     const id = encodeURIComponent($('judgment-assignment').value);
@@ -1097,37 +1342,51 @@ $('load-judgments').addEventListener('click', async () => {
 $('load-summary').addEventListener('click', async () => {
   try {
     const id = encodeURIComponent($('judgment-comparison').value);
-    showJson('summary-output', await request('/api/exports/' + id + '/summary'));
+    const [summary, judgments, results] = await Promise.all([
+      request('/api/exports/' + id + '/summary'),
+      request('/api/comparisons/' + id + '/judgments'),
+      request('/api/comparisons/' + id + '/results'),
+    ]);
+    renderSummary(summary, judgments);
+    renderResults(results);
+    showJson('summary-output', summary);
+    showStatus('Results loaded.');
   } catch (error) { showStatus(error.message); }
 });
+
+$('results-previous').addEventListener('click', () =>
+  renderResultAt(currentResultIndex - 1));
+$('results-next').addEventListener('click', () =>
+  renderResultAt(currentResultIndex + 1));
 
 $('refresh-comparisons').addEventListener('click', () =>
   refreshRecords().then(() => showStatus('Comparisons refreshed.'))
     .catch((error) => showStatus(error.message)));
 
-$('export-format').addEventListener('change', () => {
-  const path = $('export-path').value;
-  if (path.startsWith('data/exports/comparison-')) {
-    $('export-path').value = path.replace(/\\.(jsonl|csv)$/, '') +
-      '.' + $('export-format').value;
-  }
-});
-
-$('export-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
+async function downloadExport(format) {
   try {
-    const format = $('export-format').value;
-    const result = await request(
-      '/api/exports/' + encodeURIComponent($('export-comparison').value), {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        format, path: $('export-path').value,
-        include_model_mapping: $('include-mapping').checked
-      })
+    const comparisonId = $('export-comparison').value;
+    const query = new URLSearchParams({
+      format,
+      include_model_mapping: String($('include-mapping').checked),
     });
-    showJson('export-output', result); showStatus('Export created.');
+    const response = await fetch('/api/exports/' + encodeURIComponent(comparisonId) +
+      '/download?' + query.toString());
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.detail || 'Unable to create export.');
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = 'comparison-' + comparisonId + '.' + format;
+    document.body.append(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+    showStatus(format.toUpperCase() + ' download started.');
   } catch (error) { showStatus(error.message); }
-});
+}
+
+$('download-jsonl').addEventListener('click', () => downloadExport('jsonl'));
+$('download-csv').addEventListener('click', () => downloadExport('csv'));
 
 
 let automationTimer;
@@ -1273,7 +1532,12 @@ legend { font-weight: 600; padding: 0 .35rem; }
 .assignment-bar { align-items: end; display: flex; flex-wrap: wrap; gap: .5rem; }
 .assignment-bar label { flex: 1 1 24rem; margin: 0; }
 .assignment-bar input { width: 100%; }
+.review-navigation { align-items: center; display: flex; flex-wrap: wrap; gap: .5rem; }
+.review-navigation label { flex: 1 1 24rem; margin: 0; }
+.review-navigation input, .review-navigation select { width: 100%; }
+.progress { font-weight: 600; margin: 1rem 0; }
 .message { min-height: 1.5rem; margin: 1rem 0; }
+.message:empty { display: none; }
 .error { color: #a40000; }
 .success { color: #176b2c; }
 .inputs { background: #f6f6f6; padding: 1rem; }
@@ -1305,17 +1569,21 @@ legend { font-weight: 600; padding: 0 .35rem; }
 </head>
 <body>
 <h1>Blind Review</h1>
-<p>Select a frozen comparison, then load one of its assignments to inspect the anonymous task
-  and submit your judgment.</p>
+<p>Select a comparison to inspect anonymous tasks and submit judgments. Use Previous and
+  Next to move through the review queue, or jump directly to a task when needed.</p>
 <div class='assignment-bar'>
-  <label for='comparison'>Frozen comparison
+  <label for='comparison'>Comparison
     <select id='comparison' required></select>
   </label>
-  <label for='assignment'>Assignment ID
+  <label for='assignment'>Jump to Task
     <select id='assignment' required disabled></select>
   </label>
-  <button id='load' type='button'>Load assignment</button>
 </div>
+<div class='review-navigation'>
+  <button id='previous' type='button' disabled>Previous</button>
+  <button id='next' type='button' disabled>Next</button>
+</div>
+<p id='review-progress' class='progress' aria-live='polite'></p>
 <p id='message' class='message' role='status' aria-live='polite'></p>
 <main id='review' class='hidden'>
   <section aria-labelledby='task-heading'>
@@ -1389,12 +1657,15 @@ legend { font-weight: 600; padding: 0 .35rem; }
     <label for='comments'>Comments (optional)</label>
     <textarea id='comments' name='comments'
       placeholder='Record observations for the evaluation team'></textarea>
-    <p><button type='submit'>Submit judgment</button></p>
+    <p><button type='submit'>Save judgment</button>
+      <button id='save-next' type='button'>Save and next</button></p>
   </form>
 </main>
 <script>
 let currentAssignmentId = null;
 let comparisons = [];
+let assignments = [];
+let currentAssignmentIndex = -1;
 
 const message = document.getElementById('message');
 const review = document.getElementById('review');
@@ -1403,6 +1674,38 @@ const judgmentForm = document.getElementById('judgment-form');
 function showMessage(text, kind = '') {
   message.textContent = text;
   message.className = 'message ' + kind;
+}
+
+function isComplete(assignment) {
+  return assignment.status === 'submitted' || assignment.status === 'skipped';
+}
+
+function assignmentStatusLabel(assignment) {
+  return isComplete(assignment) ? 'submitted' : 'not submitted';
+}
+
+function nextUnansweredIndex() {
+  if (!assignments.length) return -1;
+  const start = currentAssignmentIndex < 0 ? 0 : currentAssignmentIndex + 1;
+  const limit = currentAssignmentIndex < 0 ? assignments.length : assignments.length - 1;
+  for (let offset = 0; offset < limit; offset++) {
+    const index = (start + offset) % assignments.length;
+    if (!isComplete(assignments[index])) return index;
+  }
+  return -1;
+}
+
+function updateReviewNavigation() {
+  const completed = assignments.filter(isComplete).length;
+  const progress = document.getElementById('review-progress');
+  progress.textContent = assignments.length
+    ? 'Review ' + (currentAssignmentIndex + 1) + ' of ' + assignments.length +
+      ' · ' + completed + ' completed · ' + (assignments.length - completed) + ' remaining'
+    : '';
+  document.getElementById('previous').disabled = currentAssignmentIndex <= 0;
+  document.getElementById('next').disabled = nextUnansweredIndex() < 0;
+  document.getElementById('next').textContent = completed === assignments.length
+    ? 'All reviews complete' : 'Next';
 }
 
 function setRequiredFields(required) {
@@ -1580,10 +1883,26 @@ function renderReview(data) {
   review.classList.remove('hidden');
   judgmentForm.reset();
   document.querySelector('input[name="disposition"][value="complete"]').checked = true;
-  setRequiredFields(true);
-  showMessage(data.status === 'submitted'
-    ? 'This assignment has already been submitted. A new submission will be recorded as a revision.'
-    : 'Review loaded. Model identities are hidden.', 'success');
+  const latest = data.latest_judgment;
+  if (latest) {
+    const preference = document.querySelector(
+      '[name="overall_preference"][value="' + latest.overall_preference + '"]');
+    if (preference) preference.checked = true;
+    document.getElementById('left-acceptability').value = latest.left_acceptability || '';
+    document.getElementById('right-acceptability').value = latest.right_acceptability || '';
+    document.querySelectorAll('[name="error_tags"]').forEach((element) => {
+      element.checked = (latest.error_tags || []).includes(element.value);
+    });
+    const disposition = document.querySelector(
+      '[name="disposition"][value="' + latest.disposition + '"]');
+    if (disposition) disposition.checked = true;
+    document.getElementById('comments').value = latest.comments || '';
+  }
+  setRequiredFields(!latest || latest.disposition === 'complete');
+  updateReviewNavigation();
+  showMessage(latest
+    ? 'Existing judgment loaded. Saving again will create a revision.'
+    : '');
 }
 
 function setAssignmentPlaceholder(text, disabled = true) {
@@ -1607,7 +1926,7 @@ async function loadComparisonOptions() {
     const select = document.getElementById('comparison');
     select.replaceChildren();
     const placeholder = document.createElement('option');
-    placeholder.textContent = 'Select a frozen comparison';
+    placeholder.textContent = 'Select a comparison';
     placeholder.disabled = true;
     placeholder.selected = true;
     select.append(placeholder);
@@ -1618,7 +1937,7 @@ async function loadComparisonOptions() {
         + comparison.status;
       select.append(option);
     });
-    if (!comparisons.length) select.options[0].textContent = 'No frozen comparisons available';
+    if (!comparisons.length) select.options[0].textContent = 'No comparisons available';
     setAssignmentPlaceholder('Select a comparison first');
   } catch (error) {
     showMessage(error.message, 'error');
@@ -1636,32 +1955,41 @@ async function loadAssignmentOptions() {
       + encodeURIComponent(comparisonId));
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || 'Unable to load assignments.');
+    assignments = data;
+    currentAssignmentIndex = -1;
     const select = document.getElementById('assignment');
     select.replaceChildren();
     data.forEach((assignment) => {
       const option = document.createElement('option');
       option.value = assignment.assignment_id;
-      option.textContent = assignment.task_id + ' — ' + assignment.status + ' — '
-        + assignment.assignment_id;
+      option.textContent = assignment.task_id + ' — ' + assignmentStatusLabel(assignment);
       select.append(option);
     });
     if (!data.length) {
       setAssignmentPlaceholder('No assignments available for this comparison');
     } else {
       select.disabled = false;
+      const first = data.findIndex((assignment) => !isComplete(assignment));
+      currentAssignmentIndex = first >= 0 ? first : 0;
+      select.value = data[currentAssignmentIndex].assignment_id;
+      updateReviewNavigation();
+      await loadReviewAt(currentAssignmentIndex);
     }
   } catch (error) {
     showMessage(error.message, 'error');
   }
 }
 
-async function loadReview() {
-  const id = document.getElementById('assignment').value;
-  if (!id) {
+async function loadReviewAt(index) {
+  if (index < 0 || index >= assignments.length) {
     showMessage('Select an assignment ID.', 'error');
     return;
   }
-  showMessage('Loading assignment...');
+  currentAssignmentIndex = index;
+  const id = assignments[index].assignment_id;
+  document.getElementById('assignment').value = id;
+  updateReviewNavigation();
+  showMessage('');
   try {
     const response = await fetch('/api/review/assignments/' + encodeURIComponent(id));
     const data = await response.json();
@@ -1673,8 +2001,13 @@ async function loadReview() {
   }
 }
 
-async function submitJudgment(event) {
-  event.preventDefault();
+async function loadReview() {
+  const id = document.getElementById('assignment').value;
+  const index = assignments.findIndex((assignment) => assignment.assignment_id === id);
+  await loadReviewAt(index);
+}
+
+async function saveJudgment(advance) {
   if (!currentAssignmentId) return;
   const formData = new FormData(judgmentForm);
   const disposition = formData.get('disposition');
@@ -1701,16 +2034,40 @@ async function submitJudgment(event) {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || 'Unable to submit judgment.');
-    showMessage('Judgment submitted successfully (version ' + data.version + ').', 'success');
+    assignments[currentAssignmentIndex].status = data.status || 'submitted';
+    updateReviewNavigation();
+    if (advance) {
+      const next = nextUnansweredIndex();
+      if (next >= 0) {
+        await loadReviewAt(next);
+      } else {
+        showMessage('All reviews are complete.', 'success');
+      }
+    } else {
+      showMessage('Judgment saved (version ' + data.version + ').', 'success');
+    }
   } catch (error) {
     showMessage(error.message, 'error');
   }
 }
 
-document.getElementById('load').addEventListener('click', loadReview);
+function submitJudgment(event) {
+  event.preventDefault();
+  saveJudgment(false);
+}
+
 document.getElementById('comparison').addEventListener('change', () => {
   loadAssignmentOptions();
 });
+document.getElementById('previous').addEventListener('click', () => {
+  if (currentAssignmentIndex > 0) loadReviewAt(currentAssignmentIndex - 1);
+});
+document.getElementById('next').addEventListener('click', () => {
+  const next = nextUnansweredIndex();
+  if (next >= 0) loadReviewAt(next);
+});
+document.getElementById('save-next').addEventListener('click', () => saveJudgment(true));
+document.getElementById('assignment').addEventListener('change', loadReview);
 loadComparisonOptions();
 document.querySelectorAll('[name="disposition"]').forEach((element) => {
   element.addEventListener('change', () => setRequiredFields(element.value === 'complete'));
